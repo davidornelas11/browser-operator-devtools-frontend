@@ -20,6 +20,7 @@ import * as Buttons from '../../../ui/components/buttons/buttons.js';
 import type * as MarkdownView from '../../../ui/components/markdown_view/markdown_view.js';
 import type {MarkdownLitRenderer} from '../../../ui/components/markdown_view/MarkdownView.js';
 import * as UI from '../../../ui/legacy/legacy.js';
+import { ScrollPinHelper } from './ScrollPinHelper.js';
 import * as Lit from '../../../ui/lit/lit.js';
 import * as VisualLogging from '../../../ui/visual_logging/visual_logging.js';
 import {PatchWidget} from '../PatchWidget.js';
@@ -308,28 +309,14 @@ export interface Props {
 
 export class ChatView extends HTMLElement {
   readonly #shadow = this.attachShadow({mode: 'open'});
-  #scrollTop?: number;
+  #markdownRenderer = new MarkdownRendererWithCodeBlock();
+  // Scroll management helper replaces ad-hoc state/logic
+  #scrollHelper = new ScrollPinHelper();
   #props: Props;
   #messagesContainerElement?: Element;
   #mainElementRef?: Lit.Directives.Ref<Element> = Lit.Directives.createRef();
   #messagesContainerResizeObserver = new ResizeObserver(() => this.#handleMessagesContainerResize());
-  /**
-   * Indicates whether the chat scroll position should be pinned to the bottom.
-   *
-   * This is true when:
-   *   - The scroll is at the very bottom, allowing new messages to push the scroll down automatically.
-   *   - The panel is initially rendered and the user hasn't scrolled yet.
-   *
-   * It is set to false when the user scrolls up to view previous messages.
-   */
-  #pinScrollToBottom = true;
-  /**
-   * Indicates whether the scroll event originated from code
-   * or a user action. When set to `true`, `handleScroll` will ignore the event,
-   * allowing it to only handle user-driven scrolls and correctly decide
-   * whether to pin the content to the bottom.
-   */
-  #isProgrammaticScroll = false;
+  #popoverHelper: UI.PopoverHelper.PopoverHelper|null = null;
 
   constructor(props: Props) {
     super();
@@ -353,8 +340,13 @@ export class ChatView extends HTMLElement {
     this.#messagesContainerResizeObserver.disconnect();
   }
 
+  // Centralize access to the textarea to avoid repeated querySelector casts
+  #getTextArea(): HTMLTextAreaElement|null {
+    return this.#shadow.querySelector('.chat-input') as HTMLTextAreaElement | null;
+  }
+
   clearTextInput(): void {
-    const textArea = this.#shadow.querySelector('.chat-input') as HTMLTextAreaElement;
+    const textArea = this.#getTextArea();
     if (!textArea) {
       return;
     }
@@ -362,7 +354,7 @@ export class ChatView extends HTMLElement {
   }
 
   focusTextInput(): void {
-    const textArea = this.#shadow.querySelector('.chat-input') as HTMLTextAreaElement;
+    const textArea = this.#getTextArea();
     if (!textArea) {
       return;
     }
@@ -371,51 +363,88 @@ export class ChatView extends HTMLElement {
   }
 
   restoreScrollPosition(): void {
-    if (this.#scrollTop === undefined) {
-      return;
+    // Ensure helper has latest element
+    if (this.#mainElementRef?.value) {
+      this.#scrollHelper.setElement(this.#mainElementRef.value as HTMLElement);
     }
-
-    if (!this.#mainElementRef?.value) {
-      return;
-    }
-
-    this.#setMainElementScrollTop(this.#scrollTop);
+    this.#scrollHelper.restoreLastPosition();
   }
 
   scrollToBottom(): void {
-    if (!this.#mainElementRef?.value) {
+    if (this.#mainElementRef?.value) {
+      this.#scrollHelper.setElement(this.#mainElementRef.value as HTMLElement);
+    }
+    this.#scrollHelper.scrollToBottom();
+  }
+
+  #handleChatUiRef(el: Element|undefined): void {
+    if (!el || this.#popoverHelper) {
       return;
     }
 
-    this.#setMainElementScrollTop(this.#mainElementRef.value.scrollHeight);
+    // TODO: Update here when b/409965560 is fixed.
+    this.#popoverHelper = new UI.PopoverHelper.PopoverHelper((el as HTMLElement), event => {
+      const popoverShownNode =
+          event.target instanceof HTMLElement && event.target.id === RELEVANT_DATA_LINK_ID ? event.target : null;
+      if (!popoverShownNode) {
+        return null;
+      }
+
+      // We move the glass pane to be a bit lower so
+      // that it does not disappear when moving the cursor
+      // over to link.
+      const nodeBox = popoverShownNode.boxInWindow();
+      nodeBox.y = nodeBox.y + TOOLTIP_POPOVER_OFFSET;
+      return {
+        box: nodeBox,
+        show: async (popover: UI.GlassPane.GlassPane) => {
+          // clang-format off
+          Lit.render(html`
+            <style>
+              .info-tooltip-container {
+                max-width: var(--sys-size-28);
+                padding: var(--sys-size-4) var(--sys-size-5);
+
+                .tooltip-link {
+                  display: block;
+                  margin-top: var(--sys-size-4);
+                  color: var(--sys-color-primary);
+                  padding-left: 0;
+                }
+              }
+            </style>
+            <div class="info-tooltip-container">
+              ${this.#props.disclaimerText}
+              <button
+                class="link tooltip-link"
+                role="link"
+                jslog=${VisualLogging.link('open-ai-settings').track({
+                  click: true,
+                })}
+                @click=${() => {
+                  void UI.ViewManager.ViewManager.instance().showView('chrome-ai');
+                }}
+              >${i18nString(UIStrings.learnAbout)}</button>
+            </div>`, popover.contentElement, {host: this});
+          // clang-format on
+          return true;
+        },
+      };
+    });
+    this.#popoverHelper.setTimeout(0);
   }
 
   #handleMessagesContainerResize(): void {
-    if (!this.#pinScrollToBottom) {
-      return;
+    if (this.#mainElementRef?.value) {
+      this.#scrollHelper.setElement(this.#mainElementRef.value as HTMLElement);
     }
-
-    if (!this.#mainElementRef?.value) {
-      return;
-    }
-
-    if (this.#pinScrollToBottom) {
-      this.#setMainElementScrollTop(this.#mainElementRef.value.scrollHeight);
-    }
+    this.#scrollHelper.handleResize();
   }
 
-  #setMainElementScrollTop(scrollTop: number): void {
-    if (!this.#mainElementRef?.value) {
-      return;
-    }
-
-    this.#scrollTop = scrollTop;
-    this.#isProgrammaticScroll = true;
-    this.#mainElementRef.value.scrollTop = scrollTop;
-  }
+  // Removed ad-hoc scroll setter in favor of ScrollPinHelper
 
   #setInputText(text: string): void {
-    const textArea = this.#shadow.querySelector('.chat-input') as HTMLTextAreaElement;
+    const textArea = this.#getTextArea();
     if (!textArea) {
       return;
     }
@@ -430,7 +459,6 @@ export class ChatView extends HTMLElement {
     if (el) {
       this.#messagesContainerResizeObserver.observe(el);
     } else {
-      this.#pinScrollToBottom = true;
       this.#messagesContainerResizeObserver.disconnect();
     }
   }
@@ -439,18 +467,10 @@ export class ChatView extends HTMLElement {
     if (!ev.target || !(ev.target instanceof HTMLElement)) {
       return;
     }
-
-    // Do not handle scroll events caused by programmatically
-    // updating the scroll position. We want to know whether user
-    // did scroll the container from the user interface.
-    if (this.#isProgrammaticScroll) {
-      this.#isProgrammaticScroll = false;
-      return;
+    if (this.#mainElementRef?.value) {
+      this.#scrollHelper.setElement(this.#mainElementRef.value as HTMLElement);
     }
-
-    this.#scrollTop = ev.target.scrollTop;
-    this.#pinScrollToBottom =
-        ev.target.scrollTop + ev.target.clientHeight + SCROLL_ROUNDING_OFFSET > ev.target.scrollHeight;
+    this.#scrollHelper.handleScroll(ev.target);
   };
 
   #handleSubmit = (ev: SubmitEvent): void => {
@@ -459,7 +479,7 @@ export class ChatView extends HTMLElement {
       return;
     }
 
-    const textArea = this.#shadow.querySelector('.chat-input') as HTMLTextAreaElement;
+    const textArea = this.#getTextArea();
     if (!textArea?.value) {
       return;
     }
@@ -514,44 +534,44 @@ export class ChatView extends HTMLElement {
     Host.userMetrics.actionTaken(Host.UserMetrics.Action.AiAssistanceDynamicSuggestionClicked);
   };
 
-  #render(): void {
-    const renderFooter = (): Lit.LitTemplate => {
-      const classes = Lit.Directives.classMap({
-        'chat-view-footer': true,
-        'has-conversation': !!this.#props.conversationType,
-        'is-read-only': this.#props.isReadOnly,
-      });
+  #renderFooter(): Lit.LitTemplate {
+    const classes = Lit.Directives.classMap({
+      'chat-view-footer': true,
+      'has-conversation': !!this.#props.conversationType,
+      'is-read-only': this.#props.isReadOnly,
+    });
 
-      // clang-format off
-      const footerContents = this.#props.conversationType
-        ? renderRelevantDataDisclaimer({
+    // clang-format off
+    const footerContents = this.#props.conversationType
+      ? renderRelevantDataDisclaimer({
           isLoading: this.#props.isLoading,
           blockedByCrossOrigin: this.#props.blockedByCrossOrigin,
-          tooltipId: RELEVANT_DATA_LINK_FOOTER_ID,
-          disclaimerText: this.#props.disclaimerText,
         })
-        : html`<p>
-            ${lockedString(UIStringsNotTranslate.inputDisclaimerForEmptyState)}
-            <button
-              class="link"
-              role="link"
-              jslog=${VisualLogging.link('open-ai-settings').track({
-                click: true,
-              })}
-              @click=${() => {
-                void UI.ViewManager.ViewManager.instance().showView(
-                  'chrome-ai',
-                );
-              }}
-            >${i18nString(UIStrings.learnAbout)}</button>
-          </p>`;
+      : html`<p>
+          ${lockedString(UIStringsNotTranslate.inputDisclaimerForEmptyState)}
+          <button
+            class="link"
+            role="link"
+            jslog=${VisualLogging.link('open-ai-settings').track({
+              click: true,
+            })}
+            @click=${() => {
+              void UI.ViewManager.ViewManager.instance().showView(
+                'chrome-ai',
+              );
+            }}
+          >${i18nString(UIStrings.learnAbout)}</button>
+        </p>`;
 
-      return html`
-        <footer class=${classes} jslog=${VisualLogging.section('footer')}>
-          ${footerContents}
-        </footer>
-      `;
-    };
+    return html`
+      <footer class=${classes} jslog=${VisualLogging.section('footer')}>
+        ${footerContents}
+      </footer>
+    `;
+    // clang-format on
+  }
+
+  #render(): void {
     // clang-format off
     Lit.render(html`
       <style>${chatViewStyles}</style>
@@ -609,7 +629,7 @@ export class ChatView extends HTMLElement {
               })
           }
         </main>
-       ${renderFooter()}
+       ${this.#renderFooter()}
       </div>
     `, this.#shadow, {host: this});
     // clang-format on
