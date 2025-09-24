@@ -1,11 +1,15 @@
 // Copyright 2025 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+// Cache break: 2025-09-17T17:38:00Z - Fixed API key validation
 
+import { BUILD_CONFIG } from '../../core/BuildConfig.js';
 import { WebSocketRPCClient } from '../../common/WebSocketRPCClient.js';
+import { LLMConfigurationManager, type LLMConfig } from '../../core/LLMConfigurationManager.js';
 import { getEvaluationConfig, getEvaluationClientId } from '../../common/EvaluationConfig.js';
 import { ToolRegistry, ConfigurableAgentTool } from '../../agent_framework/ConfigurableAgentTool.js';
 import { AgentService } from '../../core/AgentService.js';
+import { AIChatPanel } from '../../ui/AIChatPanel.js';
 import { createLogger } from '../../core/Logger.js';
 import { createTracingProvider, withTracingContext, isTracingEnabled, getTracingConfig } from '../../tracing/TracingConfig.js';
 import { AgentDescriptorRegistry, type AgentDescriptor } from '../../core/AgentDescriptorRegistry.js';
@@ -22,17 +26,21 @@ import {
   EvaluationRequest,
   EvaluationSuccessResponse,
   EvaluationErrorResponse,
+  LLMConfigurationRequest,
+  LLMConfigurationResponse,
   ErrorCodes,
   isWelcomeMessage,
   isRegistrationAckMessage,
   isEvaluationRequest,
+  isLLMConfigurationRequest,
   isPongMessage,
   createRegisterMessage,
   createReadyMessage,
   createAuthVerifyMessage,
   createStatusMessage,
   createSuccessResponse,
-  createErrorResponse
+  createErrorResponse,
+  createLLMConfigurationResponse
 } from './EvaluationProtocol.js';
 
 const logger = createLogger('EvaluationAgent');
@@ -186,6 +194,9 @@ export class EvaluationAgent {
       else if (isEvaluationRequest(message)) {
         await this.handleEvaluationRequest(message);
       }
+      else if (isLLMConfigurationRequest(message)) {
+        await this.handleLLMConfigurationRequest(message);
+      }
       else if (isPongMessage(message)) {
         logger.debug('Received pong');
       }
@@ -268,6 +279,14 @@ export class EvaluationAgent {
   }
 
   private async handleAuthRequest(message: RegistrationAckMessage): Promise<void> {
+    // In automated mode, skip authentication entirely
+    if (BUILD_CONFIG.AUTOMATED_MODE) {
+      logger.info('Automated mode: Skipping authentication verification');
+      const authMessage = createAuthVerifyMessage(message.clientId, true);
+      this.client?.send(authMessage);
+      return;
+    }
+
     if (!message.serverSecretKey) {
       logger.error('Server did not provide secret key for verification');
       this.disconnect();
@@ -315,6 +334,7 @@ export class EvaluationAgent {
   private async handleEvaluationRequest(request: EvaluationRequest): Promise<void> {
     const { params, id } = request;
     const startTime = Date.now();
+    let hasSetEarlyOverride = false;
 
     logger.info('Received evaluation request', {
       evaluationId: params.evaluationId,
@@ -324,6 +344,76 @@ export class EvaluationAgent {
       modelOverride: params.input?.ai_chat_model,
       modelConfig: params.model
     });
+
+    // CRITICAL FIX: Set configuration override early for any model configuration provided
+    // This allows API keys from request body to be available for UI-level validation
+    logger.info('DEBUG: Checking for model configuration override', {
+      evaluationId: params.evaluationId,
+      hasModel: !!params.model,
+      model: params.model
+    });
+
+    if (params.model && (params.model.main_model || params.model.provider || params.model.api_key)) {
+      const configManager = LLMConfigurationManager.getInstance();
+
+      // Extract configuration from nested model structure - handle both flat and nested formats
+      const mainModel = params.model.main_model as any;
+
+      // For nested format: main_model: { provider: "openai", model: "gpt-4", api_key: "key" }
+      // For flat format: { provider: "openai", main_model: "gpt-4", api_key: "key" }
+      const provider = mainModel?.provider || params.model.provider || 'openai';
+      const apiKey = mainModel?.api_key || params.model.api_key;
+      const modelName = mainModel?.model || mainModel || params.model.main_model;
+      const miniModel = (params.model.mini_model as any)?.model || params.model.mini_model;
+      const nanoModel = (params.model.nano_model as any)?.model || params.model.nano_model;
+
+      logger.info('DEBUG: Extracted model configuration', {
+        evaluationId: params.evaluationId,
+        mainModel,
+        provider,
+        hasApiKey: !!apiKey,
+        apiKeyLength: apiKey?.length,
+        modelName,
+        miniModel,
+        nanoModel
+      });
+
+      if (apiKey) {
+        logger.info('Setting early configuration override for evaluation', {
+          evaluationId: params.evaluationId,
+          provider,
+          hasApiKey: !!apiKey,
+          modelName
+        });
+
+        configManager.setOverride({
+          provider,
+          apiKey,
+          mainModel: modelName,
+          miniModel: miniModel || modelName,
+          nanoModel: nanoModel || miniModel || modelName
+        });
+        hasSetEarlyOverride = true;
+
+        logger.info('DEBUG: Early override set successfully', {
+          evaluationId: params.evaluationId
+        });
+      } else {
+        logger.warn('DEBUG: No API key found in model configuration', {
+          evaluationId: params.evaluationId,
+          mainModel,
+          provider
+        });
+      }
+    } else {
+      logger.warn('DEBUG: No model configuration found for override', {
+        evaluationId: params.evaluationId,
+        hasModel: !!params.model,
+        hasMainModel: !!(params.model?.main_model),
+        hasProvider: !!(params.model?.provider),
+        hasApiKey: !!(params.model?.api_key)
+      });
+    }
 
     // Track active evaluation
     this.activeEvaluations.set(params.evaluationId, {
@@ -455,15 +545,41 @@ export class EvaluationAgent {
         this.sendStatus(params.evaluationId, 'running', 0.5, 'Processing chat request...');
         
         // Merge model configuration - prefer params.model over params.input model fields
+        // Also check for early override configuration from LLMConfigurationManager
+        const configManager = LLMConfigurationManager.getInstance();
+        const hasOverride = configManager.hasOverride?.() || false;
+        const overrideConfig = hasOverride ? configManager.getConfiguration() : null;
+
         const mergedInput = {
           ...params.input,
           ...(params.model && {
-            main_model: params.model.main_model,
-            mini_model: params.model.mini_model,
-            nano_model: params.model.nano_model,
-            provider: params.model.provider
+            // Extract nested model configuration properly
+            main_model: (params.model.main_model as any)?.model || params.model.main_model,
+            mini_model: (params.model.mini_model as any)?.model || params.model.mini_model,
+            nano_model: (params.model.nano_model as any)?.model || params.model.nano_model,
+            provider: (params.model.main_model as any)?.provider || params.model.provider,
+            api_key: (params.model.main_model as any)?.api_key || (params.model as any).api_key
+          }),
+          // Apply early override configuration if available
+          ...(overrideConfig && {
+            provider: overrideConfig.provider || ((params.model?.main_model as any)?.provider || params.model?.provider),
+            api_key: overrideConfig.apiKey || ((params.model?.main_model as any)?.api_key || (params.model as any)?.api_key),
+            main_model: overrideConfig.mainModel || ((params.model?.main_model as any)?.model || params.model?.main_model),
+            mini_model: overrideConfig.miniModel || ((params.model?.mini_model as any)?.model || params.model?.mini_model),
+            nano_model: overrideConfig.nanoModel || ((params.model?.nano_model as any)?.model || params.model?.nano_model),
+            endpoint: overrideConfig.endpoint || ((params.model as any)?.endpoint || (params.model?.main_model as any)?.endpoint)
           })
         };
+
+        logger.info('DEBUG: Created merged input for chat evaluation', {
+          evaluationId: params.evaluationId,
+          hasOverrideConfig: !!overrideConfig,
+          overrideConfig,
+          mergedInput: {
+            ...mergedInput,
+            api_key: mergedInput.api_key ? `${mergedInput.api_key.substring(0, 10)}...` : undefined
+          }
+        });
         
         toolResult = await this.executeChatEvaluation(
           mergedInput,
@@ -580,6 +696,17 @@ export class EvaluationAgent {
 
     } finally {
       this.activeEvaluations.delete(params.evaluationId);
+
+      // Clean up early override if we set one
+      if (hasSetEarlyOverride) {
+        try {
+          const configManager = LLMConfigurationManager.getInstance();
+          configManager.clearOverride();
+          logger.info('Cleared early configuration override', { evaluationId: params.evaluationId });
+        } catch (clearError) {
+          logger.warn('Failed to clear early configuration override:', clearError);
+        }
+      }
     }
   }
 
@@ -753,25 +880,50 @@ export class EvaluationAgent {
       }, timeout);
 
       let chatObservationId: string | undefined;
+      // Get configuration manager for override support (defined outside try-catch for finally block)
+      const configManager = LLMConfigurationManager.getInstance();
       const orchestratorDescriptor = await this.orchestratorDescriptorPromise;
 
       try {
+
         // Get or create AgentService instance
         const agentService = AgentService.getInstance();
-        
-        // Use explicit models from constructor
-        const modelName = this.judgeModel;
-        const miniModel = this.miniModel;
-        const nanoModel = this.nanoModel;
-        
-        logger.info('Initializing AgentService for chat evaluation', {
-          modelName,
-          hasApiKey: !!agentService.getApiKey(),
+
+        // Get current configuration as baseline
+        const config = configManager.getConfiguration();
+
+        // Consolidate configuration with proper fallbacks
+        // Priority: input values -> existing config -> defaults
+        const provider = input.provider || config.provider || 'openai';
+        const mainModel = input.main_model || config.mainModel || this.judgeModel;
+        const miniModel = input.mini_model ?? config.miniModel ?? this.miniModel;
+        const nanoModel = input.nano_model ?? config.nanoModel ?? this.nanoModel;
+        const apiKey = input.api_key ?? config.apiKey ?? agentService.getApiKey();
+        const endpoint = input.endpoint ?? config.endpoint;
+
+        logger.info('Setting consolidated configuration override for chat evaluation', {
+          provider: provider,
+          mainModel: mainModel,
+          hasApiKey: !!apiKey,
+          hasEndpoint: !!endpoint,
           isInitialized: agentService.isInitialized()
         });
-        
-        // Always reinitialize with the current model and explicit mini/nano
-        await agentService.initialize(agentService.getApiKey(), modelName, miniModel, nanoModel);
+
+        // Set single consolidated override with all fallback values
+        configManager.setOverride({
+          provider: provider,
+          mainModel: mainModel,
+          miniModel: miniModel,
+          nanoModel: nanoModel,
+          apiKey: apiKey || undefined,
+          endpoint: endpoint || undefined
+        });
+
+        // Send the message using AgentService directly but with configuration override
+        // The configuration override ensures it uses the API key from the request
+        const finalMessage: ChatMessage = tracingContext
+          ? await withTracingContext(tracingContext, () => agentService.sendMessage(input.message))
+          : await agentService.sendMessage(input.message);
         
         // Create a child observation for the chat execution
         if (tracingContext) {
@@ -782,7 +934,7 @@ export class EvaluationAgent {
               name: 'Chat Execution',
               type: 'span',
               startTime: new Date(),
-              input: { message: input.message, model: modelName },
+              input: { message: input.message, model: mainModel },
               metadata: {
                 evaluationType: 'chat',
                 ...(orchestratorDescriptor ? {
@@ -797,11 +949,6 @@ export class EvaluationAgent {
             logger.warn('Failed to create chat execution observation:', error);
           }
         }
-        
-        // Send the message with the evaluation tracing context
-        const finalMessage: ChatMessage = tracingContext 
-          ? await withTracingContext(tracingContext, () => agentService.sendMessage(input.message))
-          : await agentService.sendMessage(input.message);
         
         clearTimeout(timer);
         
@@ -840,23 +987,23 @@ export class EvaluationAgent {
         const result = {
           response: responseText,
           messages: agentService.getMessages(),
-          modelUsed: modelName,
+          modelUsed: mainModel,
           timestamp: new Date().toISOString(),
           evaluationMetadata: {
             evaluationType: 'chat',
-            actualModelUsed: modelName
+            actualModelUsed: mainModel
           }
         };
         
         logger.info('Chat evaluation completed successfully', {
           responseLength: responseText.length,
           messageCount: result.messages.length,
-          modelUsed: modelName,
+          modelUsed: mainModel,
           evaluationId: tracingContext?.traceId
         });
         
         resolve(result);
-        
+
       } catch (error) {
         clearTimeout(timer);
         
@@ -882,10 +1029,133 @@ export class EvaluationAgent {
             logger.warn('Failed to update chat execution observation with error:', updateError);
           }
         }
-        
+
         logger.error('Chat evaluation failed:', error);
         reject(error);
+      } finally {
+        // Clear configuration override after evaluation
+        configManager.clearOverride();
       }
     });
+  }
+
+  /**
+   * Handle LLM configuration requests for persistent configuration
+   */
+  private async handleLLMConfigurationRequest(request: LLMConfigurationRequest): Promise<void> {
+    const { params, id } = request;
+
+    logger.info('Received LLM configuration request', {
+      provider: params.provider,
+      hasApiKey: !!params.apiKey,
+      models: params.models,
+      partial: params.partial
+    });
+
+    try {
+      // Get configuration manager
+      const configManager = LLMConfigurationManager.getInstance();
+
+      // Store current config for potential rollback
+      const currentConfig = configManager.loadConfiguration();
+
+      // Handle configuration update based on partial flag
+      if (params.partial) {
+        // Use the new partial configuration method
+        const partialConfig: Partial<LLMConfig> = {};
+        if (params.provider !== undefined) partialConfig.provider = params.provider;
+        if (params.apiKey !== undefined) partialConfig.apiKey = params.apiKey;
+        if (params.endpoint !== undefined) partialConfig.endpoint = params.endpoint;
+        if (params.models?.main !== undefined) partialConfig.mainModel = params.models.main;
+        if (params.models?.mini !== undefined) partialConfig.miniModel = params.models.mini;
+        if (params.models?.nano !== undefined) partialConfig.nanoModel = params.models.nano;
+
+        configManager.applyPartialConfiguration(partialConfig);
+      } else {
+        // Full configuration update
+        const fullConfig: LLMConfig = {
+          provider: params.provider,
+          apiKey: params.apiKey,
+          endpoint: params.endpoint,
+          mainModel: params.models.main,
+          miniModel: params.models?.mini,
+          nanoModel: params.models?.nano
+        };
+        configManager.saveConfiguration(fullConfig);
+      }
+
+      // Validate the saved configuration
+      const postSaveValidation = configManager.validateConfiguration();
+
+      if (!postSaveValidation.isValid) {
+        // Restore the original config if validation fails
+        configManager.saveConfiguration(currentConfig);
+
+        // Send error response with validation errors
+        const errorResponse = createErrorResponse(
+          id,
+          ErrorCodes.INVALID_PARAMS,
+          'Invalid configuration',
+          { errors: postSaveValidation.errors }
+        );
+
+        if (this.client) {
+          this.client.send(errorResponse);
+        }
+
+        logger.error('Configuration validation failed', {
+          errors: postSaveValidation.errors
+        });
+
+        return;
+      }
+
+      // Reinitialize AgentService with new configuration
+      const agentService = AgentService.getInstance();
+      await agentService.refreshCredentials();
+
+      // Get the applied configuration
+      const appliedConfiguration = configManager.loadConfiguration();
+
+      // Prepare response with applied configuration
+      const appliedConfig = {
+        provider: appliedConfiguration.provider,
+        models: {
+          main: appliedConfiguration.mainModel,
+          mini: appliedConfiguration.miniModel || '',
+          nano: appliedConfiguration.nanoModel || ''
+        }
+      };
+
+      // Send success response
+      const response = createLLMConfigurationResponse(id, appliedConfig);
+
+      if (this.client) {
+        this.client.send(response);
+      }
+
+      logger.info('LLM configuration applied successfully', {
+        provider: appliedConfiguration.provider,
+        mainModel: appliedConfiguration.mainModel
+      });
+
+    } catch (error) {
+      logger.error('Failed to apply LLM configuration:', error);
+
+      // Send error response
+      const errorResponse = createErrorResponse(
+        id,
+        ErrorCodes.INTERNAL_ERROR,
+        'Failed to apply LLM configuration',
+        {
+          error: error instanceof Error ? error.message : String(error),
+          timestamp: new Date().toISOString()
+        }
+      );
+
+      if (this.client) {
+        this.client.send(errorResponse);
+      }
+    }
   }
 }
