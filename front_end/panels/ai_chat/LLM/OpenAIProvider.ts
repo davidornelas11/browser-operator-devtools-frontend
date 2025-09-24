@@ -7,6 +7,7 @@ import { LLMBaseProvider } from './LLMProvider.js';
 import { LLMRetryManager } from './LLMErrorHandler.js';
 import { LLMResponseParser } from './LLMResponseParser.js';
 import { createLogger } from '../core/Logger.js';
+import { BUILD_CONFIG } from '../core/BuildConfig.js';
 
 const logger = createLogger('OpenAIProvider');
 
@@ -522,9 +523,17 @@ export class OpenAIProvider extends LLMBaseProvider {
    * Validate that required credentials are available for OpenAI
    */
   validateCredentials(): {isValid: boolean, message: string, missingItems?: string[]} {
+    // In AUTOMATED_MODE, skip credential validation since API keys are provided dynamically
+    if (BUILD_CONFIG.AUTOMATED_MODE) {
+      return {
+        isValid: true,
+        message: 'OpenAI credentials validation skipped in AUTOMATED_MODE (API keys provided dynamically).'
+      };
+    }
+
     const storageKeys = this.getCredentialStorageKeys();
     const apiKey = localStorage.getItem(storageKeys.apiKey!);
-    
+
     if (!apiKey) {
       return {
         isValid: false,
@@ -532,7 +541,7 @@ export class OpenAIProvider extends LLMBaseProvider {
         missingItems: ['API Key']
       };
     }
-    
+
     return {
       isValid: true,
       message: 'OpenAI credentials are configured correctly.'

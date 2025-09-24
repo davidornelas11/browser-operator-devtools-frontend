@@ -1,6 +1,7 @@
 // Copyright 2025 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+// Cache break: 2025-09-17T22:47:00Z - Add AUTOMATED_MODE bypass for createAgentGraph API key validation
 
 import * as Common from '../../../core/common/common.js';
 import * as i18n from '../../../core/i18n/i18n.js';
@@ -14,13 +15,16 @@ import { AgentDescriptorRegistry } from './AgentDescriptorRegistry.js';
 import {type AgentState, createInitialState, createUserMessage} from './State.js';
 import type {CompiledGraph} from './Types.js';
 import { LLMClient } from '../LLM/LLMClient.js';
+import { LLMConfigurationManager } from './LLMConfigurationManager.js';
 import { createTracingProvider, getCurrentTracingContext } from '../tracing/TracingConfig.js';
 import type { TracingProvider, TracingContext } from '../tracing/TracingProvider.js';
 import { AgentRunnerEventBus } from '../agent_framework/AgentRunnerEventBus.js';
 import { AgentRunner } from '../agent_framework/AgentRunner.js';
 import type { AgentSession, AgentMessage } from '../agent_framework/AgentSessionTypes.js';
 import type { LLMProvider } from '../LLM/LLMTypes.js';
+import { BUILD_CONFIG } from './BuildConfig.js';
 
+// Cache break: 2025-09-17T17:54:00Z - Force rebuild with AUTOMATED_MODE bypass
 const logger = createLogger('AgentService');
 
 /**
@@ -58,6 +62,7 @@ export class AgentService extends Common.ObjectWrapper.ObjectWrapper<{
   #tracingProvider!: TracingProvider;
   #sessionId: string;
   #activeAgentSessions = new Map<string, AgentSession>();
+  #configManager: LLMConfigurationManager;
 
   // Global registry for all active executions
   private static activeExecutions = new Map<string, AbortController>();
@@ -96,7 +101,10 @@ export class AgentService extends Common.ObjectWrapper.ObjectWrapper<{
 
   constructor() {
     super();
-    
+
+    // Initialize configuration manager
+    this.#configManager = LLMConfigurationManager.getInstance();
+
     // Initialize tracing
     this.#sessionId = this.generateSessionId();
     this.#initializeTracing();
@@ -115,6 +123,9 @@ export class AgentService extends Common.ObjectWrapper.ObjectWrapper<{
     
     // Subscribe to AgentRunner events
     AgentRunnerEventBus.getInstance().addEventListener('agent-progress', this.#handleAgentProgress.bind(this));
+
+    // Subscribe to configuration changes
+    this.#configManager.addChangeListener(this.#handleConfigurationChange.bind(this));
   }
 
   /**
@@ -139,59 +150,63 @@ export class AgentService extends Common.ObjectWrapper.ObjectWrapper<{
    */
   async #initializeLLMClient(): Promise<void> {
     const llm = LLMClient.getInstance();
-    
-    // Get configuration from localStorage
-    const provider = localStorage.getItem('ai_chat_provider') || 'openai';
-    const openaiKey = localStorage.getItem('ai_chat_api_key') || '';
-    const litellmKey = localStorage.getItem('ai_chat_litellm_api_key') || '';
-    const litellmEndpoint = localStorage.getItem('ai_chat_litellm_endpoint') || '';
-    const groqKey = localStorage.getItem('ai_chat_groq_api_key') || '';
-    const openrouterKey = localStorage.getItem('ai_chat_openrouter_api_key') || '';
-    
+
+    // Get configuration from manager (with override support)
+    const config = this.#configManager.getConfiguration();
+    const provider = config.provider;
+    const apiKey = config.apiKey;
+    const endpoint = config.endpoint;
+
     const providers = [];
-    
-    // Only add the selected provider
-    if (provider === 'openai' && openaiKey) {
-      providers.push({ 
-        provider: 'openai' as const, 
-        apiKey: openaiKey 
-      });
+
+    // Validate and add the selected provider
+    // Skip credential checks in AUTOMATED_MODE where API keys come from request body
+    const validation = this.#configManager.validateConfiguration(BUILD_CONFIG.AUTOMATED_MODE);
+    if (!validation.isValid) {
+      throw new Error(`Configuration validation failed: ${validation.errors.join(', ')}`);
     }
-      
-    if (provider === 'litellm' && litellmEndpoint) {
-      providers.push({ 
-        provider: 'litellm' as const, 
-        apiKey: litellmKey, // Can be empty for some LiteLLM endpoints
-        providerURL: litellmEndpoint 
-      });
+
+    // Only add the selected provider if it has valid configuration
+    switch (provider) {
+      case 'openai':
+        if (apiKey) {
+          providers.push({
+            provider: 'openai' as const,
+            apiKey
+          });
+        }
+        break;
+      case 'litellm':
+        if (endpoint) {
+          providers.push({
+            provider: 'litellm' as const,
+            apiKey: apiKey || '', // Can be empty for some LiteLLM endpoints
+            providerURL: endpoint
+          });
+        }
+        break;
+      case 'groq':
+        if (apiKey) {
+          providers.push({
+            provider: 'groq' as const,
+            apiKey
+          });
+        }
+        break;
+      case 'openrouter':
+        if (apiKey) {
+          providers.push({
+            provider: 'openrouter' as const,
+            apiKey
+          });
+        }
+        break;
     }
-      
-    if (provider === 'groq' && groqKey) {
-      providers.push({ 
-        provider: 'groq' as const, 
-        apiKey: groqKey 
-      });
-    }
-      
-    if (provider === 'openrouter' && openrouterKey) {
-      providers.push({ 
-        provider: 'openrouter' as const, 
-        apiKey: openrouterKey 
-      });
-    }
-    
+
     if (providers.length === 0) {
-      let errorMessage = 'OpenAI API key is required for this configuration';
-      if (provider === 'litellm') {
-        errorMessage = 'LiteLLM endpoint is required for this configuration';
-      } else if (provider === 'groq') {
-        errorMessage = 'Groq API key is required for this configuration';
-      } else if (provider === 'openrouter') {
-        errorMessage = 'OpenRouter API key is required for this configuration';
-      }
-      throw new Error(errorMessage);
+      throw new Error(`No valid configuration found for provider ${provider}`);
     }
-    
+
     await llm.initialize({ providers });
     logger.info('LLM client initialized successfully', {
       selectedProvider: provider,
@@ -213,9 +228,9 @@ export class AgentService extends Common.ObjectWrapper.ObjectWrapper<{
       // Check if the configuration requires an API key
       const requiresApiKey = this.#doesCurrentConfigRequireApiKey();
       
-      // If API key is required but not provided, throw error
-      if (requiresApiKey && !apiKey) {
-        const provider = localStorage.getItem('ai_chat_provider') || 'openai';
+      // If API key is required but not provided, throw error (unless in AUTOMATED_MODE)
+      if (requiresApiKey && !apiKey && !BUILD_CONFIG.AUTOMATED_MODE) {
+        const provider = this.#configManager.getProvider();
         let providerName = 'OpenAI';
         if (provider === 'litellm') {
           providerName = 'LiteLLM';
@@ -227,13 +242,13 @@ export class AgentService extends Common.ObjectWrapper.ObjectWrapper<{
         throw new Error(`${providerName} API key is required for this configuration`);
       }
 
-      // Determine selected provider for primary graph execution
-      const selectedProvider = (localStorage.getItem('ai_chat_provider') || 'openai') as LLMProvider;
+      // Get provider from configuration manager
+      const config = this.#configManager.getConfiguration();
 
       // Mini and nano models are injected by caller (validated upstream)
 
       // Will throw error if model/provider configuration is invalid
-      this.#graph = createAgentGraph(apiKey, modelName, selectedProvider, miniModel, nanoModel);
+      this.#graph = createAgentGraph(apiKey, modelName, config.provider, miniModel, nanoModel);
 
       // Stash apiKey in state context for downstream tools that need it
       if (!this.#state.context) { (this.#state as any).context = {}; }
@@ -314,18 +329,62 @@ export class AgentService extends Common.ObjectWrapper.ObjectWrapper<{
   }
 
   /**
+   * Handle configuration changes from LLMConfigurationManager
+   */
+  #handleConfigurationChange(): void {
+    logger.info('LLM configuration changed, reinitializing if needed');
+
+    // If we're initialized, we need to reinitialize with new configuration
+    if (this.#isInitialized) {
+      // Mark as uninitialized to force reinit on next use
+      this.#isInitialized = false;
+      this.#graph = undefined;
+
+      logger.info('Marked agent service for reinitialization due to config change');
+    }
+  }
+
+  /**
+   * Public method to refresh credentials and agent service
+   * Can be called from settings dialog or other components
+   */
+  async refreshCredentials(): Promise<void> {
+    logger.info('Refreshing credentials and reinitializing agent service');
+
+    this.#isInitialized = false;
+    this.#graph = undefined;
+
+    // Force reinitialization on next use
+    try {
+      const config = this.#configManager.getConfiguration();
+      await this.initialize(config.apiKey || null, config.mainModel, config.miniModel || '', config.nanoModel || '');
+      logger.info('Agent service reinitialized successfully');
+    } catch (error) {
+      logger.error('Failed to reinitialize agent service:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Sends a message to the AI agent
    */
   async sendMessage(text: string, imageInput?: ImageInputData, selectedAgentType?: string | null): Promise<ChatMessage> {
     // Check if the current configuration requires an API key
     const requiresApiKey = this.#doesCurrentConfigRequireApiKey();
-    
-    if (requiresApiKey && !this.#apiKey) {
+
+    if (requiresApiKey && !this.#apiKey && !BUILD_CONFIG.AUTOMATED_MODE) {
       throw new Error('API key not set. Please set the API key in settings.');
     }
 
     if (!text.trim()) {
       throw new Error('Empty message. Please enter some text.');
+    }
+
+    // In AUTOMATED_MODE, ensure the graph is initialized even without API key
+    if (BUILD_CONFIG.AUTOMATED_MODE && !this.#graph) {
+      const config = this.#configManager.getConfiguration();
+      // Initialize with empty API key in AUTOMATED_MODE - will be overridden by request
+      await this.initialize('', config.mainModel, config.miniModel || '', config.nanoModel || '');
     }
 
     // Create a user message
@@ -712,7 +771,7 @@ export class AgentService extends Common.ObjectWrapper.ObjectWrapper<{
   #doesCurrentConfigRequireApiKey(): boolean {
     try {
       // Check the selected provider
-      const selectedProvider = localStorage.getItem('ai_chat_provider') || 'openai';
+      const selectedProvider = this.#configManager.getProvider();
       
       // OpenAI provider always requires an API key
       if (selectedProvider === 'openai') {
