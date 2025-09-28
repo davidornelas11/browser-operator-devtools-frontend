@@ -344,6 +344,7 @@ export const knownContextValues = new Set([
   'ai-assistance-history-images',
   'ai-assistance-patching-fre-completed',
   'ai-assistance-patching-selected-project-id',
+  'ai-chat',
   'ai-code-completion-citations',
   'ai-code-completion-citations.citation-link',
   'ai-code-completion-disclaimer',
