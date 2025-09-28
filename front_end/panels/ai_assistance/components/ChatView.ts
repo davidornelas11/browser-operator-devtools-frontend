@@ -24,6 +24,7 @@ import { ScrollPinHelper } from './ScrollPinHelper.js';
 import * as Lit from '../../../ui/lit/lit.js';
 import * as VisualLogging from '../../../ui/visual_logging/visual_logging.js';
 import {PatchWidget} from '../PatchWidget.js';
+import {MarkdownRendererWithCodeBlock} from './MarkdownRendererWithCodeBlock.js';
 
 import chatViewStyles from './chatView.css.js';
 import {UserActionRow} from './UserActionRow.js';
@@ -217,6 +218,8 @@ const lockedString = i18n.i18n.lockedString;
 const SCROLL_ROUNDING_OFFSET = 1;
 const RELEVANT_DATA_LINK_FOOTER_ID = 'relevant-data-link-footer';
 const RELEVANT_DATA_LINK_CHAT_ID = 'relevant-data-link-chat';
+const RELEVANT_DATA_LINK_ID = 'relevant-data-link';
+const TOOLTIP_POPOVER_OFFSET = 8;
 
 export interface Step {
   isLoading: boolean;
@@ -546,6 +549,8 @@ export class ChatView extends HTMLElement {
       ? renderRelevantDataDisclaimer({
           isLoading: this.#props.isLoading,
           blockedByCrossOrigin: this.#props.blockedByCrossOrigin,
+          tooltipId: RELEVANT_DATA_LINK_FOOTER_ID,
+          disclaimerText: this.#props.disclaimerText,
         })
       : html`<p>
           ${lockedString(UIStringsNotTranslate.inputDisclaimerForEmptyState)}
