@@ -4,13 +4,16 @@
 
 import * as Common from '../../core/common/common.js';
 import * as Host from '../../core/host/host.js';
-import {describeWithEnvironment} from '../../testing/EnvironmentHelpers.js';
+import * as Root from '../../core/root/root.js';
+import {describeWithEnvironment, updateHostConfig} from '../../testing/EnvironmentHelpers.js';
 import {expectCall} from '../../testing/ExpectStubCall.js';
 
 import * as Badges from './badges.js';
+
 class MockActivityBadge extends Badges.Badge {
   override name = 'badges/test-badge';
   override title = 'test-badge-title';
+  override jslogContext = 'test-badge-jslogcontext';
   override imageUri = 'test-image-uri';
   override interestedActions: readonly Badges.BadgeAction[] = [
     Badges.BadgeAction.PERFORMANCE_INSIGHT_CLICKED,
@@ -24,6 +27,7 @@ class MockActivityBadge extends Badges.Badge {
 class MockStarterBadge extends Badges.Badge {
   override name = 'badges/starter-test-badge';
   override title = 'starter-test-badge';
+  override jslogContext = 'starter-test-badge-jslogcontext';
   override imageUri = 'starte-test-image-uri';
   override isStarterBadge = true;
   override interestedActions: readonly Badges.BadgeAction[] = [
@@ -68,7 +72,22 @@ function setReceiveBadgesSetting(value: boolean) {
   Common.Settings.Settings.instance().moduleSetting('receive-gdp-badges').set(value);
 }
 
+function setStarterBadgeSnoozeCount(value: number) {
+  Common.Settings.Settings.instance().createSetting('starter-badge-snooze-count', 0).set(value);
+}
+
+function setStarterBadgeLastSnoozedTimestamp(value: number) {
+  Common.Settings.Settings.instance().createSetting('starter-badge-last-snoozed-timestamp', 0).set(value);
+}
+
+function setStarterBadgeDismissed(value: boolean) {
+  Common.Settings.Settings.instance().createSetting('starter-badge-dismissed', false).set(value);
+}
+
 function setUpEnvironmentForActivatedBadges(): void {
+  setStarterBadgeSnoozeCount(0);
+  setStarterBadgeLastSnoozedTimestamp(NOW - TWO_DAYS);
+  setStarterBadgeDismissed(false);
   setReceiveBadgesSetting(true);
   mockGetSyncInformation({accountEmail: 'test@test.com', isSyncActive: false});
   mockGdpClientGetProfile({name: 'names/profile-id'});
@@ -76,19 +95,22 @@ function setUpEnvironmentForActivatedBadges(): void {
   mockGetAwardedBadgeNames([]);
 }
 
-function assertActiveBadges({
+async function assertActiveBadges({
+  clock,
   shouldStarterBadgeBeActive,
   shouldActivityBadgeBeActive,
 }: {
+  clock: sinon.SinonFakeTimers,
   shouldStarterBadgeBeActive: boolean,
   shouldActivityBadgeBeActive: boolean,
-}): void {
+}): Promise<void> {
   // Record actions that'll trigger both badges.
   const handleActivityBadgeActionStub = sinon.stub(MockActivityBadge.prototype, 'handleAction');
   const handleStarterBadgeActionStub = sinon.stub(MockStarterBadge.prototype, 'handleAction');
 
   Badges.UserBadges.instance().recordAction(Badges.BadgeAction.PERFORMANCE_INSIGHT_CLICKED);
   Badges.UserBadges.instance().recordAction(Badges.BadgeAction.CSS_RULE_MODIFIED);
+  await clock.tickAsync(DELAY_BEFORE_TRIGGER);
 
   if (shouldStarterBadgeBeActive) {
     sinon.assert.calledOnce(handleStarterBadgeActionStub);
@@ -106,10 +128,29 @@ function assertActiveBadges({
   handleActivityBadgeActionStub.restore();
 }
 
+const DELAY_BEFORE_TRIGGER = 1500;
+const NOW = 683935200000;  // Sep 4, 1991
+const TWO_DAYS = 2 * 24 * 60 * 60 * 1000;
+
 describeWithEnvironment('UserBadges', () => {
+  let clock: sinon.SinonFakeTimers;
   beforeEach(() => {
+    updateHostConfig({
+      devToolsGdpProfiles: {
+        enabled: true,
+      },
+      devToolsGdpProfilesAvailability: {
+        enabled: true,
+        enterprisePolicyValue: Root.Runtime.GdpProfilesEnterprisePolicyValue.ENABLED,
+      },
+    });
+    clock = sinon.useFakeTimers({toFake: ['Date', 'setTimeout'], now: NOW});
     Object.assign(Badges.UserBadges.BADGE_REGISTRY, MOCK_BADGE_REGISTRY);
     Badges.UserBadges.instance({forceNew: true});
+  });
+
+  afterEach(() => {
+    clock.restore();
   });
 
   it('should dispatch a badge triggered event when a badge is triggered for the first time', async () => {
@@ -119,6 +160,7 @@ describeWithEnvironment('UserBadges', () => {
     const badgeTriggeredPromise = Badges.UserBadges.instance().once(Badges.Events.BADGE_TRIGGERED);
 
     Badges.UserBadges.instance().recordAction(Badges.BadgeAction.PERFORMANCE_INSIGHT_CLICKED);
+    await clock.tickAsync(DELAY_BEFORE_TRIGGER);
 
     await badgeTriggeredPromise;
   });
@@ -131,6 +173,7 @@ describeWithEnvironment('UserBadges', () => {
 
     Badges.UserBadges.instance().recordAction(Badges.BadgeAction.PERFORMANCE_INSIGHT_CLICKED);
     Badges.UserBadges.instance().recordAction(Badges.BadgeAction.PERFORMANCE_INSIGHT_CLICKED);
+    await clock.tickAsync(DELAY_BEFORE_TRIGGER);
 
     await badgeTriggeredPromise;
   });
@@ -144,6 +187,7 @@ describeWithEnvironment('UserBadges', () => {
         const badgeTriggeredPromise = Badges.UserBadges.instance().once(Badges.Events.BADGE_TRIGGERED);
 
         Badges.UserBadges.instance().recordAction(Badges.BadgeAction.PERFORMANCE_INSIGHT_CLICKED);
+        await clock.tickAsync(DELAY_BEFORE_TRIGGER);
         const badge = await badgeTriggeredPromise;
 
         assert.strictEqual(badge.name, 'badges/test-badge');
@@ -158,7 +202,7 @@ describeWithEnvironment('UserBadges', () => {
         Badges.UserBadges.instance().addEventListener(Badges.Events.BADGE_TRIGGERED, badgeTriggeredSpy);
 
         Badges.UserBadges.instance().recordAction(Badges.BadgeAction.PERFORMANCE_INSIGHT_CLICKED);
-        await new Promise(resolve => setTimeout(resolve, 0));
+        await clock.tickAsync(DELAY_BEFORE_TRIGGER);
 
         sinon.assert.calledOnce(createAwardStub);
         sinon.assert.notCalled(badgeTriggeredSpy);
@@ -173,15 +217,17 @@ describeWithEnvironment('UserBadges', () => {
         const badgeTriggeredPromise = Badges.UserBadges.instance().once(Badges.Events.BADGE_TRIGGERED);
 
         Badges.UserBadges.instance().recordAction(Badges.BadgeAction.CSS_RULE_MODIFIED);
+        await clock.tickAsync(DELAY_BEFORE_TRIGGER);
         const badge = await badgeTriggeredPromise;
 
         assert.strictEqual(badge.name, 'badges/starter-test-badge');
         sinon.assert.calledWith(createAwardStub, {name: 'badges/starter-test-badge'});
       });
 
-      it('should not award a starter badge if the user does not have a GDP profile', async () => {
+      it('should not award a starter badge if the user does not have a GDP profile but trigger the badge', async () => {
         setReceiveBadgesSetting(true);
         mockGetSyncInformation({accountEmail: 'test@test.com', isSyncActive: false});
+        mockIsEligibleToCreateProfile(true);
         mockGdpClientGetProfile(null);
         const createAwardStub = stubGdpClientCreateAward(null);
         const badgeTriggeredSpy = sinon.spy();
@@ -189,27 +235,30 @@ describeWithEnvironment('UserBadges', () => {
         Badges.UserBadges.instance().addEventListener(Badges.Events.BADGE_TRIGGERED, badgeTriggeredSpy);
 
         Badges.UserBadges.instance().recordAction(Badges.BadgeAction.CSS_RULE_MODIFIED);
-        await new Promise(resolve => setTimeout(resolve, 0));
+        await clock.tickAsync(DELAY_BEFORE_TRIGGER);
 
         sinon.assert.notCalled(createAwardStub);
-        sinon.assert.notCalled(badgeTriggeredSpy);
+        sinon.assert.calledOnce(badgeTriggeredSpy);
       });
 
-      it('should not award a starter badge if the "receive badges" setting is disabled', async () => {
-        setReceiveBadgesSetting(false);
-        mockGetSyncInformation({accountEmail: 'test@test.com', isSyncActive: false});
-        mockGdpClientGetProfile({name: 'names/profile-id'});
-        const createAwardStub = stubGdpClientCreateAward(null);
-        const badgeTriggeredSpy = sinon.spy();
-        await Badges.UserBadges.instance().initialize();
-        Badges.UserBadges.instance().addEventListener(Badges.Events.BADGE_TRIGGERED, badgeTriggeredSpy);
+      it('should not award a starter badge if the "receive badges" setting is disabled but trigger the badge',
+         async () => {
+           setReceiveBadgesSetting(false);
+           mockGetSyncInformation({accountEmail: 'test@test.com', isSyncActive: false});
+           mockGdpClientGetProfile({name: 'names/profile-id'});
+           mockIsEligibleToCreateProfile(true);
+           mockGetAwardedBadgeNames([]);
+           const createAwardStub = stubGdpClientCreateAward(null);
+           const badgeTriggeredSpy = sinon.spy();
+           await Badges.UserBadges.instance().initialize();
+           Badges.UserBadges.instance().addEventListener(Badges.Events.BADGE_TRIGGERED, badgeTriggeredSpy);
 
-        Badges.UserBadges.instance().recordAction(Badges.BadgeAction.CSS_RULE_MODIFIED);
-        await new Promise(resolve => setTimeout(resolve, 0));
+           Badges.UserBadges.instance().recordAction(Badges.BadgeAction.CSS_RULE_MODIFIED);
+           await clock.tickAsync(DELAY_BEFORE_TRIGGER);
 
-        sinon.assert.notCalled(createAwardStub);
-        sinon.assert.notCalled(badgeTriggeredSpy);
-      });
+           sinon.assert.notCalled(createAwardStub);
+           sinon.assert.calledOnce(badgeTriggeredSpy);
+         });
     });
   });
 
@@ -220,6 +269,7 @@ describeWithEnvironment('UserBadges', () => {
       const handleActionStub = sinon.stub(MockActivityBadge.prototype, 'handleAction');
 
       Badges.UserBadges.instance().recordAction(Badges.BadgeAction.PERFORMANCE_INSIGHT_CLICKED);
+      await clock.tickAsync(DELAY_BEFORE_TRIGGER);
 
       sinon.assert.calledOnce(handleActionStub);
     });
@@ -232,7 +282,8 @@ describeWithEnvironment('UserBadges', () => {
 
         await Badges.UserBadges.instance().initialize();
 
-        assertActiveBadges({
+        await assertActiveBadges({
+          clock,
           shouldActivityBadgeBeActive: false,
           shouldStarterBadgeBeActive: false,
         });
@@ -246,7 +297,8 @@ describeWithEnvironment('UserBadges', () => {
 
            await Badges.UserBadges.instance().initialize();
 
-           assertActiveBadges({
+           await assertActiveBadges({
+             clock,
              shouldActivityBadgeBeActive: false,
              shouldStarterBadgeBeActive: false,
            });
@@ -261,7 +313,52 @@ describeWithEnvironment('UserBadges', () => {
 
         await Badges.UserBadges.instance().initialize();
 
-        assertActiveBadges({
+        await assertActiveBadges({
+          clock,
+          shouldActivityBadgeBeActive: false,
+          shouldStarterBadgeBeActive: false,
+        });
+      });
+
+      it('should not activate any badges on non-branded builds', async () => {
+        setReceiveBadgesSetting(true);
+        mockIsEligibleToCreateProfile(true);
+        mockGdpClientGetProfile({name: 'profiles/test'});
+        mockGetSyncInformation({accountEmail: 'test@test.com', isSyncActive: false});
+        mockGetAwardedBadgeNames([]);
+        updateHostConfig({
+          devToolsGdpProfilesAvailability: {
+            enabled: false,
+            enterprisePolicyValue: Root.Runtime.GdpProfilesEnterprisePolicyValue.ENABLED,
+          },
+        });
+
+        await Badges.UserBadges.instance().initialize();
+
+        await assertActiveBadges({
+          clock,
+          shouldActivityBadgeBeActive: false,
+          shouldStarterBadgeBeActive: false,
+        });
+      });
+
+      it('should not activate any badges if not allowed by enterprise policy', async () => {
+        setReceiveBadgesSetting(true);
+        mockIsEligibleToCreateProfile(true);
+        mockGdpClientGetProfile({name: 'profiles/test'});
+        mockGetSyncInformation({accountEmail: 'test@test.com', isSyncActive: false});
+        mockGetAwardedBadgeNames([]);
+        updateHostConfig({
+          devToolsGdpProfilesAvailability: {
+            enabled: true,
+            enterprisePolicyValue: Root.Runtime.GdpProfilesEnterprisePolicyValue.ENABLED_WITHOUT_BADGES,
+          },
+        });
+
+        await Badges.UserBadges.instance().initialize();
+
+        await assertActiveBadges({
+          clock,
           shouldActivityBadgeBeActive: false,
           shouldStarterBadgeBeActive: false,
         });
@@ -278,7 +375,8 @@ describeWithEnvironment('UserBadges', () => {
 
            await Badges.UserBadges.instance().initialize();
 
-           assertActiveBadges({
+           await assertActiveBadges({
+             clock,
              shouldActivityBadgeBeActive: false,
              shouldStarterBadgeBeActive: true,
            });
@@ -293,7 +391,8 @@ describeWithEnvironment('UserBadges', () => {
 
            await Badges.UserBadges.instance().initialize();
 
-           assertActiveBadges({
+           await assertActiveBadges({
+             clock,
              shouldActivityBadgeBeActive: false,
              shouldStarterBadgeBeActive: true,
            });
@@ -309,7 +408,8 @@ describeWithEnvironment('UserBadges', () => {
 
            await Badges.UserBadges.instance().initialize();
 
-           assertActiveBadges({
+           await assertActiveBadges({
+             clock,
              shouldActivityBadgeBeActive: false,
              shouldStarterBadgeBeActive: true,
            });
@@ -323,7 +423,8 @@ describeWithEnvironment('UserBadges', () => {
 
         await Badges.UserBadges.instance().initialize();
 
-        assertActiveBadges({
+        await assertActiveBadges({
+          clock,
           shouldActivityBadgeBeActive: false,
           shouldStarterBadgeBeActive: false,
         });
@@ -341,7 +442,8 @@ describeWithEnvironment('UserBadges', () => {
 
            await Badges.UserBadges.instance().initialize();
 
-           assertActiveBadges({
+           await assertActiveBadges({
+             clock,
              shouldActivityBadgeBeActive: true,
              shouldStarterBadgeBeActive: true,
            });
@@ -356,10 +458,24 @@ describeWithEnvironment('UserBadges', () => {
 
         await Badges.UserBadges.instance().initialize();
 
-        assertActiveBadges({
+        await assertActiveBadges({
+          clock,
           shouldActivityBadgeBeActive: false,
           shouldStarterBadgeBeActive: true,
         });
+      });
+
+      it('should not check for eligibility if the user has a GDP profile', async () => {
+        setReceiveBadgesSetting(true);
+        const isEligibleToCreateProfileStub =
+            sinon.stub(Host.GdpClient.GdpClient.instance(), 'isEligibleToCreateProfile');
+        mockGdpClientGetProfile({name: 'profiles/test'});
+        mockGetSyncInformation({accountEmail: 'test@test.com', isSyncActive: false});
+        mockGetAwardedBadgeNames([]);
+
+        await Badges.UserBadges.instance().initialize();
+
+        sinon.assert.notCalled(isEligibleToCreateProfileStub);
       });
     });
 
@@ -371,7 +487,8 @@ describeWithEnvironment('UserBadges', () => {
       mockGetAwardedBadgeNames([]);
 
       await Badges.UserBadges.instance().initialize();
-      assertActiveBadges({
+      await assertActiveBadges({
+        clock,
         shouldActivityBadgeBeActive: true,
         shouldStarterBadgeBeActive: true,
       });
@@ -380,9 +497,147 @@ describeWithEnvironment('UserBadges', () => {
           expectCall(sinon.stub(Badges.UserBadges.instance(), 'reconcileBadgesFinishedForTest'));
       setReceiveBadgesSetting(false);
       await waitForReconcileBadgesToFinish;
-      assertActiveBadges({
+      await assertActiveBadges({
+        clock,
         shouldActivityBadgeBeActive: false,
         shouldStarterBadgeBeActive: true,
+      });
+    });
+  });
+
+  describe('starter badge snooze and dismiss', () => {
+    beforeEach(() => {
+      setStarterBadgeSnoozeCount(0);
+      setStarterBadgeLastSnoozedTimestamp(0);
+      setStarterBadgeDismissed(false);
+    });
+
+    describe('snoozeStarterBadge', () => {
+      it('should increment the snooze count and update the timestamp', () => {
+        Badges.UserBadges.instance().snoozeStarterBadge();
+        assert.strictEqual(Common.Settings.Settings.instance().settingForTest('starter-badge-snooze-count').get(), 1);
+        assert.strictEqual(
+            Common.Settings.Settings.instance().settingForTest('starter-badge-last-snoozed-timestamp').get(),
+            Date.now());
+      });
+    });
+
+    describe('dismissStarterBadge', () => {
+      it('should set the dismissed setting to true', () => {
+        Badges.UserBadges.instance().dismissStarterBadge();
+        assert.isTrue(Common.Settings.Settings.instance().settingForTest('starter-badge-dismissed').get());
+      });
+    });
+
+    describe('reconcileBadges', () => {
+      it('should not activate the starter badge if it has been dismissed', async () => {
+        setStarterBadgeDismissed(true);
+        mockGdpClientGetProfile(null);
+        mockIsEligibleToCreateProfile(true);
+        mockGetSyncInformation({accountEmail: 'test@test.com', isSyncActive: false});
+        mockGetAwardedBadgeNames([]);
+
+        await Badges.UserBadges.instance().initialize();
+
+        await assertActiveBadges({
+          clock,
+          shouldActivityBadgeBeActive: false,
+          shouldStarterBadgeBeActive: false,
+        });
+      });
+
+      it('should not activate the starter badge if it was snoozed recently', async () => {
+        setStarterBadgeLastSnoozedTimestamp(NOW - 500);
+        mockGdpClientGetProfile(null);
+        mockIsEligibleToCreateProfile(true);
+        mockGetSyncInformation({accountEmail: 'test@test.com', isSyncActive: false});
+        mockGetAwardedBadgeNames([]);
+
+        await Badges.UserBadges.instance().initialize();
+
+        await assertActiveBadges({
+          clock,
+          shouldActivityBadgeBeActive: false,
+          shouldStarterBadgeBeActive: false,
+        });
+      });
+
+      it('should not activate the starter badge if the max snooze count has been reached', async () => {
+        setStarterBadgeSnoozeCount(3);
+        mockGdpClientGetProfile(null);
+        mockIsEligibleToCreateProfile(true);
+        mockGetSyncInformation({accountEmail: 'test@test.com', isSyncActive: false});
+        mockGetAwardedBadgeNames([]);
+
+        await Badges.UserBadges.instance().initialize();
+
+        await assertActiveBadges({
+          clock,
+          shouldActivityBadgeBeActive: false,
+          shouldStarterBadgeBeActive: false,
+        });
+      });
+
+      it('should activate the starter badge if the snooze period has passed', async () => {
+        setStarterBadgeLastSnoozedTimestamp(NOW - TWO_DAYS);
+        mockGdpClientGetProfile(null);
+        mockIsEligibleToCreateProfile(true);
+        mockGetSyncInformation({accountEmail: 'test@test.com', isSyncActive: false});
+        mockGetAwardedBadgeNames([]);
+
+        await Badges.UserBadges.instance().initialize();
+
+        await assertActiveBadges({
+          clock,
+          shouldActivityBadgeBeActive: false,
+          shouldStarterBadgeBeActive: true,
+        });
+      });
+    });
+
+    describe('onTriggerBadge', () => {
+      it('should not award the starter badge if it has been dismissed', async () => {
+        setUpEnvironmentForActivatedBadges();
+        setStarterBadgeDismissed(true);
+        const createAwardStub = stubGdpClientCreateAward(null);
+        const badgeTriggeredSpy = sinon.spy();
+        await Badges.UserBadges.instance().initialize();
+        Badges.UserBadges.instance().addEventListener(Badges.Events.BADGE_TRIGGERED, badgeTriggeredSpy);
+
+        Badges.UserBadges.instance().recordAction(Badges.BadgeAction.CSS_RULE_MODIFIED);
+        await clock.tickAsync(DELAY_BEFORE_TRIGGER);
+
+        sinon.assert.notCalled(createAwardStub);
+        sinon.assert.notCalled(badgeTriggeredSpy);
+      });
+
+      it('should not award the starter badge if it was snoozed recently', async () => {
+        setUpEnvironmentForActivatedBadges();
+        setStarterBadgeLastSnoozedTimestamp(NOW - 500);
+        const createAwardStub = stubGdpClientCreateAward(null);
+        const badgeTriggeredSpy = sinon.spy();
+        await Badges.UserBadges.instance().initialize();
+        Badges.UserBadges.instance().addEventListener(Badges.Events.BADGE_TRIGGERED, badgeTriggeredSpy);
+
+        Badges.UserBadges.instance().recordAction(Badges.BadgeAction.CSS_RULE_MODIFIED);
+        await clock.tickAsync(DELAY_BEFORE_TRIGGER);
+
+        sinon.assert.notCalled(createAwardStub);
+        sinon.assert.notCalled(badgeTriggeredSpy);
+      });
+
+      it('should award the starter badge if the snooze period has passed', async () => {
+        setStarterBadgeLastSnoozedTimestamp(NOW - TWO_DAYS);
+        setUpEnvironmentForActivatedBadges();
+        const createAwardStub = stubGdpClientCreateAward('test/test-badge');
+        await Badges.UserBadges.instance().initialize();
+        const badgeTriggeredPromise = Badges.UserBadges.instance().once(Badges.Events.BADGE_TRIGGERED);
+
+        Badges.UserBadges.instance().recordAction(Badges.BadgeAction.CSS_RULE_MODIFIED);
+        await clock.tickAsync(DELAY_BEFORE_TRIGGER);
+        await badgeTriggeredPromise;
+
+        sinon.assert.calledOnce(createAwardStub);
       });
     });
   });

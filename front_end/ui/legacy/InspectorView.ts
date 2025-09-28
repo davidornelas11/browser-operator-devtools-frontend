@@ -18,7 +18,7 @@ import * as ARIAUtils from './ARIAUtils.js';
 import type {Context} from './Context.js';
 import type {ContextMenu} from './ContextMenu.js';
 import {Dialog} from './Dialog.js';
-import {DockController, DockState} from './DockController.js';
+import {DockController, DockState, Events as DockControllerEvents} from './DockController.js';
 import {GlassPane} from './GlassPane.js';
 import {Infobar, Type as InfobarType} from './Infobar.js';
 import {KeyboardShortcut} from './KeyboardShortcut.js';
@@ -127,8 +127,20 @@ export enum DrawerOrientation {
   UNSET = 'unset',
 }
 
+export enum DockMode {
+  BOTTOM = 'bottom',
+  SIDE = 'side',  // For LEFT and RIGHT
+  UNDOCKED = 'undocked',
+}
+
+export interface DrawerOrientationByDockMode {
+  [DockMode.BOTTOM]: DrawerOrientation;
+  [DockMode.SIDE]: DrawerOrientation;
+  [DockMode.UNDOCKED]: DrawerOrientation;
+}
+
 export class InspectorView extends VBox implements ViewLocationResolver {
-  private readonly drawerOrientationSetting: Common.Settings.Setting<DrawerOrientation>;
+  private readonly drawerOrientationByDockSetting: Common.Settings.Setting<DrawerOrientationByDockMode>;
   private readonly drawerSplitWidget: SplitWidget;
   private readonly tabDelegate: InspectorViewTabDelegate;
   private readonly drawerTabbedLocation: TabbedViewLocation;
@@ -136,7 +148,7 @@ export class InspectorView extends VBox implements ViewLocationResolver {
   private infoBarDiv!: HTMLDivElement|null;
   private readonly tabbedLocation: TabbedViewLocation;
   readonly tabbedPane: TabbedPane;
-  private readonly keyDownBound: (event: Event) => void;
+  private readonly keyDownBound: (event: KeyboardEvent) => void;
   private currentPanelLocked?: boolean;
   private focusRestorer?: WidgetFocusRestorer|null;
   private ownerSplitWidget?: SplitWidget;
@@ -151,9 +163,14 @@ export class InspectorView extends VBox implements ViewLocationResolver {
     this.setMinimumSize(MIN_INSPECTOR_WIDTH_HORIZONTAL_DRAWER, MIN_INSPECTOR_HEIGHT);
 
     // DevTools sidebar is a vertical split of main tab bar panels and a drawer.
-    this.drawerOrientationSetting =
-        Common.Settings.Settings.instance().createSetting('inspector.drawer-orientation', DrawerOrientation.UNSET);
-    const isVertical = this.drawerOrientationSetting.get() === DrawerOrientation.VERTICAL;
+    this.drawerOrientationByDockSetting =
+        Common.Settings.Settings.instance().createSetting('inspector.drawer-orientation-by-dock-mode', {
+          [DockMode.BOTTOM]: DrawerOrientation.UNSET,
+          [DockMode.SIDE]: DrawerOrientation.UNSET,
+          [DockMode.UNDOCKED]: DrawerOrientation.UNSET,
+        });
+    const initialOrientation = this.#getOrientationForDockMode();
+    const isVertical = initialOrientation === DrawerOrientation.VERTICAL;
     this.drawerSplitWidget = new SplitWidget(isVertical, true, 'inspector.drawer-split-view-state', 200, 200);
     this.drawerSplitWidget.hideSidebar();
     this.drawerSplitWidget.enableShowModeSaving();
@@ -180,8 +197,8 @@ export class InspectorView extends VBox implements ViewLocationResolver {
     this.#toggleOrientationButton = new ToolbarButton(
         i18nString(UIStrings.toggleDrawerOrientation),
         this.drawerSplitWidget.isVertical() ? 'dock-bottom' : 'dock-right');
-    this.#toggleOrientationButton.element.setAttribute('jslog', `${VisualLogging.toggle().track({click: true})}`);
-    this.#toggleOrientationButton.element.setAttribute('jslogcontext', 'toggle-drawer-orientation');
+    this.#toggleOrientationButton.element.setAttribute(
+        'jslog', `${VisualLogging.toggle('toggle-drawer-orientation').track({click: true})}`);
     this.#toggleOrientationButton.addEventListener(
         ToolbarButton.Events.CLICK, () => this.toggleDrawerOrientation(), this);
     this.drawerTabbedPane.addEventListener(
@@ -286,6 +303,55 @@ export class InspectorView extends VBox implements ViewLocationResolver {
     inspectorViewInstance = null;
   }
 
+  applyDrawerOrientationForDockSideForTest(): void {
+  }
+
+  #applyDrawerOrientationForDockSide(): void {
+    if (!this.drawerVisible()) {
+      this.applyDrawerOrientationForDockSideForTest();
+      return;
+    }
+    const newOrientation = this.#getOrientationForDockMode();
+    this.#applyDrawerOrientation(newOrientation);
+    this.applyDrawerOrientationForDockSideForTest();
+  }
+
+  #getDockMode(): DockMode {
+    const dockSide = DockController.instance().dockSide();
+    if (dockSide === DockState.BOTTOM) {
+      return DockMode.BOTTOM;
+    }
+    if (dockSide === DockState.UNDOCKED) {
+      return DockMode.UNDOCKED;
+    }
+
+    return DockMode.SIDE;
+  }
+
+  #getOrientationForDockMode(): Omit<DrawerOrientation, DrawerOrientation.UNSET> {
+    const dockMode = this.#getDockMode();
+    const orientationSetting = this.drawerOrientationByDockSetting.get();
+
+    let orientation = orientationSetting[dockMode];
+    if (orientation === DrawerOrientation.UNSET) {
+      // Apply defaults: horizontal for side-dock, vertical for bottom-dock.
+      orientation = dockMode === DockMode.BOTTOM ? DrawerOrientation.VERTICAL : DrawerOrientation.HORIZONTAL;
+    }
+    return orientation;
+  }
+
+  #applyDrawerOrientation(orientation: Omit<DrawerOrientation, DrawerOrientation.UNSET>): void {
+    const shouldBeVertical = orientation === DrawerOrientation.VERTICAL;
+    const isVertical = this.drawerSplitWidget.isVertical();
+    if (shouldBeVertical === isVertical) {
+      return;
+    }
+
+    this.#toggleOrientationButton.setGlyph(shouldBeVertical ? 'dock-bottom' : 'dock-right');
+    this.drawerSplitWidget.setVertical(shouldBeVertical);
+    this.setDrawerRelatedMinimumSizes();
+  }
+
   #observedResize(): void {
     const rect = this.element.getBoundingClientRect();
     this.element.style.setProperty('--devtools-window-left', `${rect.left}px`);
@@ -300,11 +366,16 @@ export class InspectorView extends VBox implements ViewLocationResolver {
     this.#resizeObserver.observe(this.element);
     this.#observedResize();
     this.element.ownerDocument.addEventListener('keydown', this.keyDownBound, false);
+    DockController.instance().addEventListener(
+        DockControllerEvents.DOCK_SIDE_CHANGED, this.#applyDrawerOrientationForDockSide, this);
+    this.#applyDrawerOrientationForDockSide();
   }
 
   override willHide(): void {
     this.#resizeObserver.unobserve(this.element);
     this.element.ownerDocument.removeEventListener('keydown', this.keyDownBound, false);
+    DockController.instance().removeEventListener(
+        DockControllerEvents.DOCK_SIDE_CHANGED, this.#applyDrawerOrientationForDockSide, this);
   }
 
   resolveLocation(locationName: string): ViewLocation|null {
@@ -399,6 +470,7 @@ export class InspectorView extends VBox implements ViewLocationResolver {
     } else {
       this.focusRestorer = null;
     }
+    this.#applyDrawerOrientationForDockSide();
     ARIAUtils.LiveAnnouncer.alert(i18nString(UIStrings.drawerShown));
   }
 
@@ -422,21 +494,29 @@ export class InspectorView extends VBox implements ViewLocationResolver {
     if (!this.drawerTabbedPane.isShowing()) {
       return;
     }
-    let drawerWillBeVertical: boolean;
+
+    const dockMode = this.#getDockMode();
+    const currentSettings = this.drawerOrientationByDockSetting.get();
+
+    let newOrientation: Omit<DrawerOrientation, DrawerOrientation.UNSET>;
     if (force) {
-      drawerWillBeVertical = force === DrawerOrientation.VERTICAL;
+      newOrientation = force;
     } else {
-      drawerWillBeVertical = !this.drawerSplitWidget.isVertical();
+      const currentOrientation = this.#getOrientationForDockMode();
+      newOrientation =
+          currentOrientation === DrawerOrientation.VERTICAL ? DrawerOrientation.HORIZONTAL : DrawerOrientation.VERTICAL;
     }
 
-    this.drawerOrientationSetting.set(drawerWillBeVertical ? DrawerOrientation.VERTICAL : DrawerOrientation.HORIZONTAL);
-    this.#toggleOrientationButton.setGlyph(drawerWillBeVertical ? 'dock-bottom' : 'dock-right');
-    this.drawerSplitWidget.setVertical(drawerWillBeVertical);
-    this.setDrawerRelatedMinimumSizes();
+    currentSettings[dockMode] = newOrientation as DrawerOrientation;
+    this.drawerOrientationByDockSetting.set(currentSettings);
+
+    this.#applyDrawerOrientation(newOrientation);
   }
 
   isUserExplicitlyUpdatedDrawerOrientation(): boolean {
-    return this.drawerOrientationSetting.get() !== DrawerOrientation.UNSET;
+    const orientationSetting = this.drawerOrientationByDockSetting.get();
+    const dockMode = this.#getDockMode();
+    return orientationSetting[dockMode] !== DrawerOrientation.UNSET;
   }
 
   setDrawerRelatedMinimumSizes(): void {
@@ -477,9 +557,8 @@ export class InspectorView extends VBox implements ViewLocationResolver {
     return this.drawerSplitWidget.isVertical();
   }
 
-  private keyDown(event: Event): void {
-    const keyboardEvent = (event as KeyboardEvent);
-    if (!KeyboardShortcut.eventHasCtrlEquivalentKey(keyboardEvent) || keyboardEvent.altKey || keyboardEvent.shiftKey) {
+  private keyDown(event: KeyboardEvent): void {
+    if (!KeyboardShortcut.eventHasCtrlEquivalentKey(event) || event.altKey || event.shiftKey) {
       return;
     }
 
@@ -487,12 +566,11 @@ export class InspectorView extends VBox implements ViewLocationResolver {
     const panelShortcutEnabled = Common.Settings.moduleSetting('shortcut-panel-switch').get();
     if (panelShortcutEnabled) {
       let panelIndex = -1;
-      if (keyboardEvent.keyCode > 0x30 && keyboardEvent.keyCode < 0x3A) {
-        panelIndex = keyboardEvent.keyCode - 0x31;
+      if (event.keyCode > 0x30 && event.keyCode < 0x3A) {
+        panelIndex = event.keyCode - 0x31;
       } else if (
-          keyboardEvent.keyCode > 0x60 && keyboardEvent.keyCode < 0x6A &&
-          keyboardEvent.location === KeyboardEvent.DOM_KEY_LOCATION_NUMPAD) {
-        panelIndex = keyboardEvent.keyCode - 0x61;
+          event.keyCode > 0x60 && event.keyCode < 0x6A && event.location === KeyboardEvent.DOM_KEY_LOCATION_NUMPAD) {
+        panelIndex = event.keyCode - 0x61;
       }
       if (panelIndex !== -1) {
         const panelName = this.tabbedPane.tabIds()[panelIndex];

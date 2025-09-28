@@ -18,6 +18,7 @@ import {Plugin} from './Plugin.js';
 
 const AI_CODE_COMPLETION_CHARACTER_LIMIT = 20_000;
 const DISCLAIMER_TOOLTIP_ID = 'sources-ai-code-completion-disclaimer-tooltip';
+const SPINNER_TOOLTIP_ID = 'sources-ai-code-completion-spinner-tooltip';
 const CITATIONS_TOOLTIP_ID = 'sources-ai-code-completion-citations-tooltip';
 
 export class AiCodeCompletionPlugin extends Plugin {
@@ -40,7 +41,7 @@ export class AiCodeCompletionPlugin extends Plugin {
   #aiCodeCompletionCitationsToolbarContainer = document.createElement('div');
   #aiCodeCompletionCitationsToolbarAttached = false;
 
-  #boundEditorKeyDown: (event: Event) => Promise<void>;
+  #boundEditorKeyDown: (event: KeyboardEvent) => Promise<void>;
   #boundOnAiCodeCompletionSettingChanged: () => void;
 
   constructor(uiSourceCode: Workspace.UISourceCode.UISourceCode) {
@@ -58,6 +59,9 @@ export class AiCodeCompletionPlugin extends Plugin {
     if (showTeaser) {
       this.#teaser = new PanelCommon.AiCodeCompletionTeaser({onDetach: this.#detachAiCodeCompletionTeaser.bind(this)});
     }
+
+    this.#aiCodeCompletionDisclaimerContainer.classList.add('ai-code-completion-disclaimer-container');
+    this.#aiCodeCompletionDisclaimerContainer.style.paddingInline = 'var(--sys-size-3)';
   }
 
   static override accepts(uiSourceCode: Workspace.UISourceCode.UISourceCode): boolean {
@@ -87,10 +91,7 @@ export class AiCodeCompletionPlugin extends Plugin {
   override editorExtension(): CodeMirror.Extension {
     return [
       CodeMirror.EditorView.updateListener.of(update => this.#editorUpdate(update)), this.#teaserCompartment.of([]),
-      // conservativeCompletion is required so that the completion suggestions in the traditional
-      // autocomplete menu are only activated after the first keyDown/keyUp events.
-      TextEditor.Config.conservativeCompletion, TextEditor.Config.aiAutoCompleteSuggestion,
-      CodeMirror.Prec.highest(CodeMirror.keymap.of(this.#editorKeymap()))
+      TextEditor.Config.aiAutoCompleteSuggestion, CodeMirror.Prec.highest(CodeMirror.keymap.of(this.#editorKeymap()))
     ];
   }
 
@@ -102,6 +103,7 @@ export class AiCodeCompletionPlugin extends Plugin {
     if (this.#teaser) {
       if (update.docChanged) {
         update.view.dispatch({effects: this.#teaserCompartment.reconfigure([])});
+        window.clearTimeout(this.#teaserDisplayTimeout);
         this.#addTeaserPluginToCompartment(update.view);
       } else if (update.selectionSet && update.state.doc.length > 0) {
         update.view.dispatch({effects: this.#teaserCompartment.reconfigure([])});
@@ -167,11 +169,11 @@ export class AiCodeCompletionPlugin extends Plugin {
     ];
   }
 
-  async #editorKeyDown(event: Event): Promise<void> {
+  async #editorKeyDown(event: KeyboardEvent): Promise<void> {
     if (!this.#teaser?.isShowing()) {
       return;
     }
-    const keyboardEvent = (event as KeyboardEvent);
+    const keyboardEvent = event;
     if (UI.KeyboardShortcut.KeyboardShortcut.eventHasCtrlEquivalentKey(keyboardEvent)) {
       if (keyboardEvent.key === 'i') {
         keyboardEvent.consume(true);
@@ -186,10 +188,6 @@ export class AiCodeCompletionPlugin extends Plugin {
   }
 
   #addTeaserPluginToCompartment = Common.Debouncer.debounce((view: CodeMirror.EditorView) => {
-    if (this.#teaserDisplayTimeout) {
-      window.clearTimeout(this.#teaserDisplayTimeout);
-      this.#teaserDisplayTimeout = undefined;
-    }
     this.#teaserDisplayTimeout = window.setTimeout(() => {
       this.#addTeaserPluginToCompartmentImmediate(view);
     }, AiCodeCompletion.AiCodeCompletion.DELAY_BEFORE_SHOWING_RESPONSE_MS);
@@ -215,8 +213,11 @@ export class AiCodeCompletionPlugin extends Plugin {
       this.#teaser = undefined;
     }
     if (!this.#aiCodeCompletion) {
+      const contextFlavor = this.uiSourceCode.url().startsWith('snippet://') ?
+          AiCodeCompletion.AiCodeCompletion.ContextFlavor.CONSOLE :
+          AiCodeCompletion.AiCodeCompletion.ContextFlavor.SOURCES;
       this.#aiCodeCompletion = new AiCodeCompletion.AiCodeCompletion.AiCodeCompletion(
-          {aidaClient: this.#aidaClient}, this.#editor, AiCodeCompletion.AiCodeCompletion.Panel.SOURCES);
+          {aidaClient: this.#aidaClient}, this.#editor, contextFlavor);
       this.#aiCodeCompletion.addEventListener(
           AiCodeCompletion.AiCodeCompletion.Events.REQUEST_TRIGGERED, this.#onAiRequestTriggered, this);
       this.#aiCodeCompletion.addEventListener(
@@ -232,6 +233,7 @@ export class AiCodeCompletionPlugin extends Plugin {
     }
     this.#aiCodeCompletionDisclaimer = new PanelCommon.AiCodeCompletionDisclaimer();
     this.#aiCodeCompletionDisclaimer.disclaimerTooltipId = DISCLAIMER_TOOLTIP_ID;
+    this.#aiCodeCompletionDisclaimer.spinnerTooltipId = SPINNER_TOOLTIP_ID;
     this.#aiCodeCompletionDisclaimer.show(this.#aiCodeCompletionDisclaimerContainer, undefined, true);
   }
 

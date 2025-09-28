@@ -222,6 +222,16 @@ const UIStrings = {
    */
   disableScrollSnap: 'Disable scroll-snap overlay',
   /**
+   * @description Label of an adorner in the Elements panel. When clicked, it forces
+   * the element into applying its starting-style rules.
+   */
+  enableStartingStyle: 'Enable @starting-style mode',
+  /**
+   * @description Label of an adorner in the Elements panel. When clicked, it no longer
+   * forces the element into applying its starting-style rules.
+   */
+  disableStartingStyle: 'Disable @starting-style mode',
+  /**
    * @description Label of an adorner in the Elements panel. When clicked, it redirects
    * to the Media Panel.
    */
@@ -486,6 +496,24 @@ export class ElementsTreeElement extends UI.TreeOutline.TreeElement {
     function setPseudoStateCallback(pseudoState: string, enabled: boolean): void {
       node.domModel().cssModel().forcePseudoState(node, pseudoState, enabled);
     }
+  }
+
+  highlightAttribute(attributeName: string): void {
+    // If the attribute is not found, we highlight the tag name instead.
+    let animationElement = this.listItemElement.querySelector('.webkit-html-tag-name') ?? this.listItemElement;
+
+    if (this.nodeInternal.getAttribute(attributeName) !== undefined) {
+      const tag = this.listItemElement.getElementsByClassName('webkit-html-tag')[0];
+      const attributes = tag.getElementsByClassName('webkit-html-attribute');
+      for (const attribute of attributes) {
+        const attributeElement = attribute.getElementsByClassName('webkit-html-attribute-name')[0];
+        if (attributeElement.textContent === attributeName) {
+          animationElement = attributeElement;
+          break;
+        }
+      }
+    }
+    UI.UIUtils.runCSSAnimationOnce(animationElement, 'dom-update-highlight');
   }
 
   isClosingTag(): boolean {
@@ -2568,6 +2596,13 @@ export class ElementsTreeElement extends UI.TreeOutline.TreeElement {
       this.pushMediaAdorner(this.tagTypeContext);
     }
 
+    if (Root.Runtime.hostConfig.devToolsStartingStyleDebugging?.enabled) {
+      const affectedByStartingStyles = node.affectedByStartingStyles();
+      if (affectedByStartingStyles) {
+        this.pushStartingStyleAdorner(this.tagTypeContext);
+      }
+    }
+
     if (node.attributes().find(attr => attr.name === 'popover')) {
       this.pushPopoverAdorner(this.tagTypeContext);
     }
@@ -2736,6 +2771,36 @@ export class ElementsTreeElement extends UI.TreeOutline.TreeElement {
     if (node.domModel().overlayModel().isHighlightedScrollSnapInPersistentOverlay(nodeId)) {
       adorner.toggle(true);
     }
+  }
+
+  pushStartingStyleAdorner(context: OpeningTagContext): void {
+    const node = this.node();
+    const nodeId = node.id;
+    if (!nodeId) {
+      return;
+    }
+    const config = ElementsComponents.AdornerManager.getRegisteredAdorner(
+        ElementsComponents.AdornerManager.RegisteredAdorners.STARTING_STYLE);
+    const adorner = this.adorn(config);
+    adorner.classList.add('starting-style');
+
+    const onClick = ((() => {
+                       const model = node.domModel().cssModel();
+                       if (adorner.isActive()) {
+                         model.forceStartingStyle(node, true);
+                       } else {
+                         model.forceStartingStyle(node, false);
+                       }
+                     }) as EventListener);
+
+    adorner.addInteraction(onClick, {
+      isToggle: true,
+      shouldPropagateOnKeydown: false,
+      ariaLabelDefault: i18nString(UIStrings.enableStartingStyle),
+      ariaLabelActive: i18nString(UIStrings.disableStartingStyle),
+    });
+
+    context.styleAdorners.add(adorner);
   }
 
   pushFlexAdorner(context: OpeningTagContext): void {

@@ -14,19 +14,19 @@ import * as SDK from '../../../core/sdk/sdk.js';
 import * as AiAssistanceModel from '../../../models/ai_assistance/ai_assistance.js';
 import * as Workspace from '../../../models/workspace/workspace.js';
 import * as ElementsPanel from '../../../panels/elements/elements.js';
-import * as TimelineUtils from '../../../panels/timeline/utils/utils.js';
 import * as PanelUtils from '../../../panels/utils/utils.js';
 import * as Marked from '../../../third_party/marked/marked.js';
 import * as Buttons from '../../../ui/components/buttons/buttons.js';
 import type * as MarkdownView from '../../../ui/components/markdown_view/markdown_view.js';
+import type {MarkdownLitRenderer} from '../../../ui/components/markdown_view/MarkdownView.js';
 import * as UI from '../../../ui/legacy/legacy.js';
 import { ScrollPinHelper } from './ScrollPinHelper.js';
 import * as Lit from '../../../ui/lit/lit.js';
 import * as VisualLogging from '../../../ui/visual_logging/visual_logging.js';
 import {PatchWidget} from '../PatchWidget.js';
+import {MarkdownRendererWithCodeBlock} from './MarkdownRendererWithCodeBlock.js';
 
 import chatViewStyles from './chatView.css.js';
-import {MarkdownRendererWithCodeBlock} from './MarkdownRendererWithCodeBlock.js';
 import {UserActionRow} from './UserActionRow.js';
 
 const {html, Directives: {ifDefined, ref}} = Lit;
@@ -216,8 +216,10 @@ const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
 const lockedString = i18n.i18n.lockedString;
 
 const SCROLL_ROUNDING_OFFSET = 1;
-const TOOLTIP_POPOVER_OFFSET = 4;
+const RELEVANT_DATA_LINK_FOOTER_ID = 'relevant-data-link-footer';
+const RELEVANT_DATA_LINK_CHAT_ID = 'relevant-data-link-chat';
 const RELEVANT_DATA_LINK_ID = 'relevant-data-link';
+const TOOLTIP_POPOVER_OFFSET = 8;
 
 export interface Step {
   isLoading: boolean;
@@ -305,6 +307,7 @@ export interface Props {
   disclaimerText: Platform.UIString.LocalizedString;
   isTextInputEmpty: boolean;
   uploadImageInputEnabled?: boolean;
+  markdownRenderer: MarkdownLitRenderer;
 }
 
 export class ChatView extends HTMLElement {
@@ -324,7 +327,6 @@ export class ChatView extends HTMLElement {
   }
 
   set props(props: Props) {
-    this.#markdownRenderer = new MarkdownRendererWithCodeBlock();
     this.#props = props;
     this.#render();
   }
@@ -547,6 +549,8 @@ export class ChatView extends HTMLElement {
       ? renderRelevantDataDisclaimer({
           isLoading: this.#props.isLoading,
           blockedByCrossOrigin: this.#props.blockedByCrossOrigin,
+          tooltipId: RELEVANT_DATA_LINK_FOOTER_ID,
+          disclaimerText: this.#props.disclaimerText,
         })
       : html`<p>
           ${lockedString(UIStringsNotTranslate.inputDisclaimerForEmptyState)}
@@ -576,7 +580,7 @@ export class ChatView extends HTMLElement {
     // clang-format off
     Lit.render(html`
       <style>${chatViewStyles}</style>
-      <div class="chat-ui" ${Lit.Directives.ref(this.#handleChatUiRef)}>
+      <div class="chat-ui">
         <main @scroll=${this.#handleScroll} ${ref(this.#mainElementRef)}>
           ${renderMainContents({
             state: this.#props.state,
@@ -588,7 +592,7 @@ export class ChatView extends HTMLElement {
             isTextInputDisabled: this.#props.isTextInputDisabled,
             suggestions: this.#props.emptyStateSuggestions,
             userInfo: this.#props.userInfo,
-            markdownRenderer: this.#markdownRenderer,
+            markdownRenderer: this.#props.markdownRenderer,
             conversationType: this.#props.conversationType,
             changeSummary: this.#props.changeSummary,
             changeManager: this.#props.changeManager,
@@ -608,6 +612,7 @@ export class ChatView extends HTMLElement {
                 isTextInputDisabled: this.#props.isTextInputDisabled,
                 inputPlaceholder: this.#props.inputPlaceholder,
                 state: this.#props.state,
+                disclaimerText: this.#props.disclaimerText,
                 selectedContext: this.#props.selectedContext,
                 inspectElementToggled: this.#props.inspectElementToggled,
                 multimodalInputEnabled: this.#props.multimodalInputEnabled,
@@ -636,7 +641,7 @@ export class ChatView extends HTMLElement {
   }
 }
 
-function renderTextAsMarkdown(text: string, markdownRenderer: MarkdownRendererWithCodeBlock, {animate, ref: refFn}: {
+function renderTextAsMarkdown(text: string, markdownRenderer: MarkdownLitRenderer, {animate, ref: refFn}: {
   animate?: boolean,
   ref?: (element?: Element) => void,
 } = {}): Lit.TemplateResult {
@@ -717,7 +722,7 @@ function renderStepDetails({
   isLast,
 }: {
   step: Step,
-  markdownRenderer: MarkdownRendererWithCodeBlock,
+  markdownRenderer: MarkdownLitRenderer,
   isLast: boolean,
 }): Lit.LitTemplate {
   const sideEffects = isLast && step.sideEffect ? renderSideEffectConfirmationUi(step) : Lit.nothing;
@@ -781,7 +786,7 @@ function renderStepBadge({step, isLoading, isLast}: {
 function renderStep({step, isLoading, markdownRenderer, isLast}: {
   step: Step,
   isLoading: boolean,
-  markdownRenderer: MarkdownRendererWithCodeBlock,
+  markdownRenderer: MarkdownLitRenderer,
   isLast: boolean,
 }): Lit.LitTemplate {
   const stepClasses = Lit.Directives.classMap({
@@ -890,7 +895,7 @@ function renderChatMessage({
   canShowFeedbackForm: boolean,
   isLast: boolean,
   userInfo: Pick<Host.InspectorFrontendHostAPI.SyncInformation, 'accountImage'|'accountFullName'>,
-  markdownRenderer: MarkdownRendererWithCodeBlock,
+  markdownRenderer: MarkdownLitRenderer,
   onSuggestionClick: (suggestion: string) => void,
   onFeedbackSubmit: (rpcId: Host.AidaClient.RpcGlobalId, rate: Host.AidaClient.Rating, feedback?: string) => void,
   onCopyResponseClick: (message: ModelChatMessage) => void,
@@ -1003,7 +1008,7 @@ function renderContextIcon(context: AiAssistanceModel.ConversationContext<unknow
   if (item instanceof Workspace.UISourceCode.UISourceCode) {
     return PanelUtils.PanelUtils.getIconForSourceFile(item);
   }
-  if (item instanceof TimelineUtils.AIContext.AgentFocus) {
+  if (item instanceof AiAssistanceModel.AgentFocus) {
     return html`<devtools-icon name="performance" title="Performance"></devtools-icon>`;
   }
   if (item instanceof SDK.DOMModel.DOMNode) {
@@ -1120,7 +1125,7 @@ function renderMessages({
   isReadOnly: boolean,
   canShowFeedbackForm: boolean,
   userInfo: Pick<Host.InspectorFrontendHostAPI.SyncInformation, 'accountImage'|'accountFullName'>,
-  markdownRenderer: MarkdownRendererWithCodeBlock,
+  markdownRenderer: MarkdownLitRenderer,
   onSuggestionClick: (suggestion: string) => void,
   onFeedbackSubmit: (rpcId: Host.AidaClient.RpcGlobalId, rate: Host.AidaClient.Rating, feedback?: string) => void,
   onCopyResponseClick: (message: ModelChatMessage) => void,
@@ -1398,8 +1403,12 @@ function renderImageInput({
   // clang-format on
 }
 
-function renderRelevantDataDisclaimer(
-    {isLoading, blockedByCrossOrigin}: {isLoading: boolean, blockedByCrossOrigin: boolean}): Lit.LitTemplate {
+function renderRelevantDataDisclaimer({isLoading, blockedByCrossOrigin, tooltipId, disclaimerText}: {
+  isLoading: boolean,
+  blockedByCrossOrigin: boolean,
+  tooltipId: string,
+  disclaimerText: string,
+}): Lit.LitTemplate {
   const classes =
       Lit.Directives.classMap({'chat-input-disclaimer': true, 'hide-divider': !isLoading && blockedByCrossOrigin});
   // clang-format off
@@ -1408,7 +1417,7 @@ function renderRelevantDataDisclaimer(
       <button
         class="link"
         role="link"
-        id=${RELEVANT_DATA_LINK_ID}
+        aria-details=${tooltipId}
         jslog=${VisualLogging.link('open-ai-settings').track({
           click: true,
         })}
@@ -1416,6 +1425,7 @@ function renderRelevantDataDisclaimer(
           void UI.ViewManager.ViewManager.instance().showView('chrome-ai');
         }}
       >${lockedString('Relevant data')}</button>&nbsp;${lockedString('is sent to Google')}
+      ${renderDisclamerTooltip(tooltipId, disclaimerText)}
     </p>
   `;
   // clang-format on
@@ -1435,6 +1445,7 @@ function renderChatInput({
   isTextInputEmpty,
   uploadImageInputEnabled,
   aidaAvailability,
+  disclaimerText,
   onContextClick,
   onInspectElementClick,
   onSubmit,
@@ -1455,6 +1466,7 @@ function renderChatInput({
   inspectElementToggled: boolean,
   isTextInputEmpty: boolean,
   aidaAvailability: Host.AidaClient.AidaAccessPreconditions,
+  disclaimerText: string,
   onContextClick: () => void,
   onInspectElementClick: () => void,
   onSubmit: (ev: SubmitEvent) => void,
@@ -1512,7 +1524,7 @@ function renderChatInput({
         </div>
         <div class="chat-input-actions-right">
           <div class="chat-input-disclaimer-container">
-            ${renderRelevantDataDisclaimer({isLoading, blockedByCrossOrigin})}
+            ${renderRelevantDataDisclaimer({ isLoading, blockedByCrossOrigin, tooltipId: RELEVANT_DATA_LINK_CHAT_ID, disclaimerText})}
           </div>
           ${renderMultimodalInputButtons({
             multimodalInputEnabled, blockedByCrossOrigin, isTextInputDisabled, imageInput, uploadImageInputEnabled, onTakeScreenshot, onImageUpload
@@ -1543,7 +1555,7 @@ function renderAidaUnavailableContents(
 }
 
 function renderConsentViewContents(): Lit.TemplateResult {
-  const settingsLink = document.createElement('button');
+  const settingsLink = document.createElement('span');
   settingsLink.textContent = i18nString(UIStrings.settingsLink);
   settingsLink.classList.add('link');
   UI.ARIAUtils.markAsLink(settingsLink);
@@ -1621,7 +1633,7 @@ function renderMainContents({
   isTextInputDisabled: boolean,
   suggestions: AiAssistanceModel.ConversationSuggestion[],
   userInfo: Pick<Host.InspectorFrontendHostAPI.SyncInformation, 'accountImage'|'accountFullName'>,
-  markdownRenderer: MarkdownRendererWithCodeBlock,
+  markdownRenderer: MarkdownLitRenderer,
   changeManager: AiAssistanceModel.ChangeManager,
   onSuggestionClick: (suggestion: string) => void,
   onFeedbackSubmit: (rpcId: Host.AidaClient.RpcGlobalId, rate: Host.AidaClient.Rating, feedback?: string) => void,
@@ -1660,6 +1672,30 @@ function renderMainContents({
   }
 
   return renderEmptyState({isTextInputDisabled, suggestions, onSuggestionClick});
+}
+
+function renderDisclamerTooltip(id: string, disclaimerText: string): Lit.TemplateResult {
+  // clang-format off
+  return html`
+    <devtools-tooltip
+      id=${id}
+      variant=${'rich'}
+    >
+      <div class="info-tooltip-container">
+        ${disclaimerText}
+        <button
+          class="link tooltip-link"
+          role="link"
+          jslog=${VisualLogging.link('open-ai-settings').track({
+            click: true,
+          })}
+          @click=${() => {
+            void UI.ViewManager.ViewManager.instance().showView('chrome-ai');
+          }}>${i18nString(UIStrings.learnAbout)}
+        </button>
+      </div>
+    </devtools-tooltip>`;
+  // clang-format on
 }
 
 declare global {

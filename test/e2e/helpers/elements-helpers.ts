@@ -8,12 +8,8 @@ import {AsyncScope} from '../../conductor/async-scope.js';
 import type {DevToolsPage} from '../../e2e_non_hosted/shared/frontend-helper.js';
 import type {InspectedPage} from '../../e2e_non_hosted/shared/target-helper.js';
 import {
-  $$,
-  clickMoreTabsButton,
-  getTextContent,
   step,
-  summonSearchBox,
-  waitForFunction,
+
 } from '../../shared/helper.js';
 import {getBrowserAndPagesWrappers} from '../../shared/non_hosted_wrappers.js';
 
@@ -50,6 +46,8 @@ const LAYOUT_PANE_TABPANEL_SELECTOR = '[aria-label="Layout panel"]';
 const ADORNER_SELECTOR = 'devtools-adorner';
 export const INACTIVE_GRID_ADORNER_SELECTOR = '[aria-label="Enable grid mode"]';
 export const ACTIVE_GRID_ADORNER_SELECTOR = '[aria-label="Disable grid mode"]';
+export const INACTIVE_STARTING_STYLE_ADORNER_SELECTOR = '[aria-label="Enable @starting-style mode"]';
+export const ACTIVE_STARTING_STYLE_ADORNER_SELECTOR = '[aria-label="Disable @starting-style mode"]';
 const ELEMENT_CHECKBOX_IN_LAYOUT_PANE_SELECTOR = `${LAYOUT_PANE_TABPANEL_SELECTOR} .elements devtools-checkbox`;
 const ELEMENT_STYLE_SECTION_SELECTOR = '[aria-label="element.style, css selector"]';
 const STYLE_QUERY_RULE_TEXT_SELECTOR = '.query-text';
@@ -94,15 +92,14 @@ export const openLayoutPane = async (devToolsPage: DevToolsPage = getBrowserAndP
 
 export const waitForAdorners = async (
     expectedAdorners: Array<{textContent: string, isActive: boolean}>,
-    devToolsPage: DevToolsPage = getBrowserAndPagesWrappers().devToolsPage) => {
+    devToolsPage: DevToolsPage = getBrowserAndPagesWrappers().devToolsPage,
+    activeSelector: string = ACTIVE_GRID_ADORNER_SELECTOR) => {
   await devToolsPage.waitForFunction(async () => {
     const actualAdorners = await devToolsPage.$$(ADORNER_SELECTOR);
     const actualAdornersStates = await Promise.all(actualAdorners.map(n => {
       return n.evaluate((node, activeSelector: string) => {
-        // TODO for now only the grid adorner that can be active. When the flex (or other) adorner can be activated
-        // too we should change the selector passed here crbug.com/1144090.
         return {textContent: node.textContent, isActive: node.matches(activeSelector)};
-      }, ACTIVE_GRID_ADORNER_SELECTOR);
+      }, activeSelector);
     }));
 
     if (actualAdornersStates.length !== expectedAdorners.length) {
@@ -306,7 +303,7 @@ export const focusElementsTree = async (devToolsPage = getBrowserAndPagesWrapper
 
 export const navigateToSidePane = async (paneName: string, devToolsPage?: DevToolsPage) => {
   devToolsPage = devToolsPage || getBrowserAndPagesWrappers().devToolsPage;
-  if ((await $$(`[aria-label="${paneName} panel"]`, undefined, undefined, devToolsPage)).length) {
+  if ((await devToolsPage.$$(`[aria-label="${paneName} panel"]`)).length) {
     return;
   }
   await devToolsPage.click(`[aria-label="${paneName}"]`);
@@ -338,7 +335,7 @@ export const waitForElementsDOMBreakpointsSection =
   let domBreakpointsPane = await devToolsPage.$('DOM Breakpoints', undefined, 'aria');
   if (!domBreakpointsPane) {
     const elementsPanel = await devToolsPage.waitForAria('Elements panel');
-    await clickMoreTabsButton(elementsPanel, devToolsPage);
+    await devToolsPage.clickMoreTabsButton(elementsPanel);
     domBreakpointsPane = await devToolsPage.waitForAria('DOM Breakpoints');
   }
   await devToolsPage.click(DOM_BREAKPOINTS_SECTION_SELECTOR);
@@ -747,7 +744,7 @@ export const getColorSwatch = async (
 export const getColorSwatchColor = async (
     parent: puppeteer.ElementHandle<Element>, index: number,
     devToolsPage: DevToolsPage = getBrowserAndPagesWrappers().devToolsPage) => {
-  const swatch = await getColorSwatch(parent, index, devToolsPage);
+  const swatch = await devToolsPage.waitForFunction(() => getColorSwatch(parent, index, devToolsPage));
   return await swatch.evaluate(node => (node as HTMLElement).style.backgroundColor);
 };
 
@@ -978,6 +975,7 @@ export const navigateToElementsTab = async (devtoolsPage = getBrowserAndPagesWra
   // Open Elements panel
   await devtoolsPage.click('#tab-elements');
   await devtoolsPage.waitFor(ELEMENTS_PANEL_SELECTOR);
+  await devtoolsPage.timeout(100);
   await expectVeEvents([veImpressionForElementsPanel()], undefined, devtoolsPage);
 };
 
@@ -1148,7 +1146,9 @@ export const getPropertiesWithHints =
 
 export const summonAndWaitForSearchBox =
     async (devToolsPage: DevToolsPage = getBrowserAndPagesWrappers().devToolsPage) => {
-  await summonSearchBox(devToolsPage);
+  // Wait for elements to load.
+  await devToolsPage.waitFor('devtools-elements-breadcrumbs');
+  await devToolsPage.summonSearchBox();
   await devToolsPage.waitFor(SEARCH_BOX_SELECTOR);
   await expectVeEvents(
       [
@@ -1165,10 +1165,10 @@ export const summonAndWaitForSearchBox =
       undefined, devToolsPage);
 };
 
-export const assertSearchResultMatchesText = async (text: string, devToolsPage?: DevToolsPage) => {
-  await waitForFunction(async () => {
-    return await getTextContent(SEARCH_RESULTS_MATCHES, undefined, devToolsPage) === text;
-  }, undefined, undefined, devToolsPage);
+export const assertSearchResultMatchesText = async (text: string, devToolsPage: DevToolsPage) => {
+  await devToolsPage.waitForFunction(async () => {
+    return await devToolsPage.getTextContent(SEARCH_RESULTS_MATCHES) === text;
+  });
 };
 
 export const goToResourceAndWaitForStyleSection = async (

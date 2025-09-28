@@ -326,7 +326,6 @@ export const enum ExperimentName {
   TIMELINE_DEBUG_MODE = 'timeline-debug-mode',
   TIMELINE_ENHANCED_TRACES = 'timeline-enhanced-traces',
   TIMELINE_COMPILED_SOURCES = 'timeline-compiled-sources',
-  TIMELINE_SAVE_AS_GZ = 'timeline-save-as-gz',
   // Adding or removing an entry from this enum?
   // You will need to update:
   // 1. REGISTERED_EXPERIMENTS in EnvironmentHelpers.ts (to create this experiment in the test env)
@@ -480,12 +479,28 @@ interface GdpProfiles {
   starterBadgeEnabled: boolean;
 }
 
+export enum GdpProfilesEnterprisePolicyValue {
+  ENABLED = 0,
+  ENABLED_WITHOUT_BADGES = 1,
+  DISABLED = 2,
+}
+
+interface GdpProfilesAvailability {
+  // Whether GDP profiles can be enabled on this host (only possible on branded builds).
+  enabled: boolean;
+  enterprisePolicyValue: GdpProfilesEnterprisePolicyValue;
+}
+
 interface LiveEdit {
   enabled: boolean;
 }
 
 interface DevToolsFlexibleLayout {
   verticalDrawerEnabled: boolean;
+}
+
+interface DevToolsStartingStyleDebugging {
+  enabled: boolean;
 }
 
 /**
@@ -530,8 +545,10 @@ export type HostConfig = Platform.TypeScriptUtilities.RecursivePartial<{
   devToolsIpProtectionInDevTools: IpProtectionInDevTools,
   devToolsGlobalAiButton: GlobalAiButton,
   devToolsGdpProfiles: GdpProfiles,
+  devToolsGdpProfilesAvailability: GdpProfilesAvailability,
   devToolsLiveEdit: LiveEdit,
   devToolsFlexibleLayout: DevToolsFlexibleLayout,
+  devToolsStartingStyleDebugging: DevToolsStartingStyleDebugging,
 }>;
 
 /**

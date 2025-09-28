@@ -12,11 +12,13 @@ import * as Host from '../../../core/host/host.js';
 import * as i18n from '../../../core/i18n/i18n.js';
 import type * as Platform from '../../../core/platform/platform.js';
 import * as Root from '../../../core/root/root.js';
+import * as SDK from '../../../core/sdk/sdk.js';
 import * as Badges from '../../../models/badges/badges.js';
 import * as Buttons from '../../../ui/components/buttons/buttons.js';
 import * as ComponentHelpers from '../../../ui/components/helpers/helpers.js';
 import type * as SettingsComponents from '../../../ui/components/settings/settings.js';
 import * as Lit from '../../../ui/lit/lit.js';
+import * as VisualLogging from '../../../ui/visual_logging/visual_logging.js';
 import * as PanelCommon from '../../common/common.js';
 import * as PanelUtils from '../../utils/utils.js';
 
@@ -29,10 +31,10 @@ const UIStrings = {
    */
   syncDisabled: 'To turn this setting on, you must enable Chrome sync.',
   /**
-   * @description Text shown to the user in the Settings UI. 'This setting' refers
-   * to a checkbox that is disabled.
+   * @description Text shown to the user in the Settings UI. Explains why the checkbox
+   * for saving DevTools settings to the user's Google account is inactive.
    */
-  preferencesSyncDisabled: 'To turn this setting on, you must first enable settings sync in Chrome.',
+  preferencesSyncDisabled: 'You need to first enable saving `Chrome` settings in your `Google` account.',
   /**
    * @description Label for the account email address. Shown in the DevTools Settings UI in
    * front of the email address currently used for Chrome Sync.
@@ -52,22 +54,12 @@ const UIStrings = {
    * @description Label for the Google Developer Program subscription status that corresponds to
    * `PREMIUM_ANNUAL` plan.
    */
-  gdpPremiumAnnualSubscription: 'Premium (Annual)',
-  /**
-   * @description Label for the Google Developer Program subscription status that corresponds to
-   * `PREMIUM_MONTHLY` plan.
-   */
-  gdpPremiumMonthlySubscription: 'Premium (Monthly)',
+  gdpPremiumSubscription: 'Premium',
   /**
    * @description Label for the Google Developer Program subscription status that corresponds to
    * `PRO_ANNUAL` plan.
    */
-  gdpProAnnualSubscription: 'Pro (Annual)',
-  /**
-   * @description Label for the Google Developer Program subscription status that corresponds to
-   * `PRO_MONTHLY` plan.
-   */
-  gdpProMonthlySubscription: 'Pro (Monthly)',
+  gdpProSubscription: 'Pro',
   /**
    * @description Label for the Google Developer Program subscription status that corresponds
    * to a plan not known by the client.
@@ -78,19 +70,54 @@ const UIStrings = {
    */
   signUp: 'Sign up',
   /**
-   * @description Text for the data notice right after the settings checkbox.
-   */
-  relevantDataDisclaimer: '(Relevant data is sent to Google)',
-  /**
    * @description Link text for opening the Google Developer Program profile page.
    */
   viewProfile: 'View profile',
+  /**
+   * @description Text for tooltip shown on hovering over "Relevant Data" in the disclaimer text for AI code completion.
+   */
+  tooltipDisclaimerText:
+      'When you qualify for a badge, the badge’s identifier and the type of activity you did to earn it are sent to Google',
+  /**
+   * @description Text for the data notice right after the settings checkbox.
+   */
+  relevantData: 'Relevant data',
+  /**
+   * @description Text for the data notice right after the settings checkbox.
+   * @example {Relevant data} PH1
+   */
+  dataDisclaimer: '({PH1} is sent to Google)',
 } as const;
 const str_ = i18n.i18n.registerUIStrings('panels/settings/components/SyncSection.ts', UIStrings);
 const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
-const lockedString = i18n.i18n.lockedString;
 
 const {html, Directives: {ref, createRef}} = Lit;
+
+let cachedTooltipElement: HTMLElement|undefined;
+
+function renderDataDisclaimer(): HTMLElement {
+  if (cachedTooltipElement) {
+    return cachedTooltipElement;
+  }
+
+  const relevantDataTooltipTemplate = html`
+    <span
+      tabIndex="0"
+      class="link"
+      aria-details="gdp-profile-tooltip"
+      aria-describedby="gdp-profile-tooltip"
+      >${i18nString(UIStrings.relevantData)}</span>
+    <devtools-tooltip id="gdp-profile-tooltip" variant=${'rich'}>
+      <div class="tooltip-content" tabindex="0">${i18nString(UIStrings.tooltipDisclaimerText)}</div>
+    </devtools-tooltip>`;
+
+  const container = document.createElement('span');
+  Lit.render(relevantDataTooltipTemplate, container);
+  cachedTooltipElement = i18n.i18n.getFormatLocalizedString(str_, UIStrings.dataDisclaimer, {
+    PH1: container,
+  });
+  return cachedTooltipElement;
+}
 
 function getGdpSubscriptionText(profile: Host.GdpClient.Profile): Platform.UIString.LocalizedString {
   if (!profile.activeSubscription ||
@@ -100,19 +127,15 @@ function getGdpSubscriptionText(profile: Host.GdpClient.Profile): Platform.UIStr
 
   switch (profile.activeSubscription.subscriptionTier) {
     case Host.GdpClient.SubscriptionTier.PREMIUM_ANNUAL:
-      return i18nString(UIStrings.gdpPremiumAnnualSubscription);
     case Host.GdpClient.SubscriptionTier.PREMIUM_MONTHLY:
-      return i18nString(UIStrings.gdpPremiumMonthlySubscription);
+      return i18nString(UIStrings.gdpPremiumSubscription);
     case Host.GdpClient.SubscriptionTier.PRO_ANNUAL:
-      return i18nString(UIStrings.gdpProAnnualSubscription);
     case Host.GdpClient.SubscriptionTier.PRO_MONTHLY:
-      return i18nString(UIStrings.gdpProMonthlySubscription);
+      return i18nString(UIStrings.gdpProSubscription);
     default:
       return i18nString(UIStrings.gdpUnknownSubscription);
   }
 }
-
-const GDP_LOGO_IMAGE_URL = new URL('../../../Images/gdp-logo-standalone.svg', import.meta.url).toString();
 
 export interface SyncSectionData {
   syncInfo: Host.InspectorFrontendHostAPI.SyncInformation;
@@ -127,14 +150,19 @@ export class SyncSection extends HTMLElement {
   #syncSetting?: Common.Settings.Setting<boolean>;
   #receiveBadgesSetting?: Common.Settings.Setting<boolean>;
   #receiveBadgesSettingContainerRef = createRef<HTMLElement>();
+  #isEligibleToCreateGdpProfile = false;
   #gdpProfile?: Host.GdpClient.Profile;
 
   set data(data: SyncSectionData) {
     this.#syncInfo = data.syncInfo;
     this.#syncSetting = data.syncSetting;
     this.#receiveBadgesSetting = data.receiveBadgesSetting;
-    void this.#updateGdpProfile();
     void ComponentHelpers.ScheduledRender.scheduleRender(this, this.#render);
+
+    // Trigger fetching GDP profile if the user is signed in.
+    if (data.syncInfo.accountEmail) {
+      void this.#fetchGdpDetails();
+    }
   }
 
   async highlightReceiveBadgesSetting(): Promise<void> {
@@ -164,15 +192,22 @@ export class SyncSection extends HTMLElement {
         ${renderGdpSectionIfNeeded({
           receiveBadgesSetting: this.#receiveBadgesSetting,
           receiveBadgesSettingContainerRef: this.#receiveBadgesSettingContainerRef,
-          gdpProfile: this.#gdpProfile
+          gdpProfile: this.#gdpProfile,
+          isEligibleToCreateProfile: this.#isEligibleToCreateGdpProfile,
+          onSignUpSuccess: this.#fetchGdpDetails.bind(this),
         })}
       </fieldset>
     `, this.#shadow, {host: this});
     // clang-format on
   }
 
-  async #updateGdpProfile(): Promise<void> {
+  async #fetchGdpDetails(): Promise<void> {
+    if (!Host.GdpClient.isGdpProfilesAvailable()) {
+      return;
+    }
+
     this.#gdpProfile = await Host.GdpClient.GdpClient.instance().getProfile() ?? undefined;
+    this.#isEligibleToCreateGdpProfile = await Host.GdpClient.GdpClient.instance().isEligibleToCreateProfile();
     void ComponentHelpers.ScheduledRender.scheduleRender(this, this.#render);
   }
 }
@@ -206,16 +241,29 @@ function renderWarningIfNeeded(syncInfo: Host.InspectorFrontendHostAPI.SyncInfor
       'chrome://settings/syncSetup/advanced' as Platform.DevToolsPath.UrlString;
   const warningText =
       !syncInfo.isSyncActive ? i18nString(UIStrings.syncDisabled) : i18nString(UIStrings.preferencesSyncDisabled);
+  const handleClick = (event: Event): void => {
+    const rootTarget = SDK.TargetManager.TargetManager.instance().rootTarget();
+    if (rootTarget === null) {
+      return;
+    }
+
+    void rootTarget.targetAgent().invoke_createTarget({url: warningLink}).then(result => {
+      if (result.getError()) {
+        Host.InspectorFrontendHost.InspectorFrontendHostInstance.openInNewTab(warningLink);
+      }
+    });
+    event.consume();
+  };
   // clang-format off
   return html`
-    <devtools-chrome-link .href=${warningLink}>
-      <devtools-button
-        aria-describedby=settings-sync-info
-        .iconName=${'info'}
-        .variant=${Buttons.Button.Variant.ICON}
-        .size=${Buttons.Button.Size.SMALL}>
-      </devtools-button>
-    </devtools-chrome-link>
+    <devtools-button
+      aria-describedby=settings-sync-info
+      .title=${warningText}
+      .iconName=${'info'}
+      .variant=${Buttons.Button.Variant.ICON}
+      .size=${Buttons.Button.Size.SMALL}
+      @click=${handleClick}>
+    </devtools-button>
     <devtools-tooltip
         id=settings-sync-info
         variant=simple>
@@ -237,7 +285,7 @@ function renderAccountInfo(syncInfo: Host.InspectorFrontendHostAPI.SyncInformati
   // clang-format off
   return html`
     <div class="account-info">
-      <img src="data:image/png;base64, ${syncInfo.accountImage}" alt="Account avatar" />
+      <img class="account-avatar" src="data:image/png;base64, ${syncInfo.accountImage}" alt="Account avatar" />
       <div class="account-email">
         <span>${i18nString(UIStrings.signedIn)}</span>
         <span>${syncInfo.accountEmail}</span>
@@ -250,27 +298,34 @@ function renderGdpSectionIfNeeded({
   receiveBadgesSetting,
   receiveBadgesSettingContainerRef,
   gdpProfile,
+  isEligibleToCreateProfile,
+  onSignUpSuccess,
 }: {
   receiveBadgesSettingContainerRef: Lit.Directives.Ref<HTMLElement>,
+  onSignUpSuccess: () => void,
   receiveBadgesSetting?: Common.Settings.Setting<boolean>,
   gdpProfile?: Host.GdpClient.Profile,
+  isEligibleToCreateProfile?: boolean,
 }): Lit.LitTemplate {
-  // clang-format off
-  if (!Root.Runtime.hostConfig.devToolsGdpProfiles?.enabled) {
+  if (!Host.GdpClient.isGdpProfilesAvailable() || (!gdpProfile && !isEligibleToCreateProfile)) {
     return Lit.nothing;
   }
+  const hasReceiveBadgesCheckbox = receiveBadgesSetting &&
+      Host.GdpClient.getGdpProfilesEnterprisePolicy() === Root.Runtime.GdpProfilesEnterprisePolicyValue.ENABLED;
 
   function renderBrand(): Lit.LitTemplate {
+    // clang-format off
     return html`
       <div class="gdp-profile-header">
-        <img src=${GDP_LOGO_IMAGE_URL} class="gdp-logo" alt="Google Developer Program">
-        ${lockedString('Google Developer Program')}
+        <div class="gdp-logo" role="img" aria-label="Google Developer Program"></div>
       </div>
     `;
+    // clang-format on
   }
 
+  // clang-format off
   return html`
-    <div class="gdp-profile-container">
+    <div class="gdp-profile-container" jslog=${VisualLogging.section().context('gdp-profile')}>
       <div class="divider"></div>
       ${gdpProfile ? html`
         <div class="gdp-profile-details-content">
@@ -278,10 +333,13 @@ function renderGdpSectionIfNeeded({
           <div class="plan-details">
             ${getGdpSubscriptionText(gdpProfile)}
             &nbsp;·&nbsp;
-            <x-link class="link" href=${Host.GdpClient.GOOGLE_DEVELOPER_PROGRAM_PROFILE_LINK}>
+            <x-link
+              jslog=${VisualLogging.link().track({click: true, keydown:'Enter|Space'}).context('view-profile')}
+              class="link"
+              href=${Host.GdpClient.GOOGLE_DEVELOPER_PROGRAM_PROFILE_LINK}>
               ${i18nString(UIStrings.viewProfile)}
             </x-link></div>
-            ${receiveBadgesSetting ? html`
+            ${hasReceiveBadgesCheckbox ? html`
               <div class="setting-container"  ${ref(receiveBadgesSettingContainerRef)}>
                 <setting-checkbox class="setting-checkbox" .data=${{setting: receiveBadgesSetting}} @change=${(e: Event) => {
                   const settingCheckbox = e.target as SettingsComponents.SettingCheckbox.SettingCheckbox;
@@ -293,15 +351,17 @@ function renderGdpSectionIfNeeded({
                     Badges.UserBadges.instance().recordAction(Badges.BadgeAction.RECEIVE_BADGES_SETTING_ENABLED);
                   });
                 }}></setting-checkbox>
-                <span>${i18nString(UIStrings.relevantDataDisclaimer)}</span>
+                ${renderDataDisclaimer()}
               </div>` : Lit.nothing}
         </div>
       ` : html`
         <div class="gdp-profile-sign-up-content">
           ${renderBrand()}
           <devtools-button
-            @click=${() => PanelCommon.GdpSignUpDialog.show()}
-            .jslogContext=${'gdp.sign-up-dialog-open'}
+            @click=${() => PanelCommon.GdpSignUpDialog.show({
+              onSuccess: onSignUpSuccess
+            })}
+            .jslogContext=${'open-sign-up-dialog'}
             .variant=${Buttons.Button.Variant.OUTLINED}>
               ${i18nString(UIStrings.signUp)}
           </devtools-button>
@@ -309,8 +369,8 @@ function renderGdpSectionIfNeeded({
       `}
     </div>
   `;
+  // clang-format on
 }
-// clang-format on
 
 customElements.define('devtools-sync-section', SyncSection);
 

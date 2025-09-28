@@ -5,7 +5,6 @@
 import type * as Common from '../../../core/common/common.js';
 import * as Host from '../../../core/host/host.js';
 import * as Platform from '../../../core/platform/platform.js';
-import * as TimelineUtils from '../../../panels/timeline/utils/utils.js';
 import {mockAidaClient} from '../../../testing/AiAssistanceHelpers.js';
 import {
   describeWithEnvironment,
@@ -19,7 +18,7 @@ import {TraceLoader} from '../../../testing/TraceLoader.js';
 import * as Trace from '../../trace/trace.js';
 import {
   type ActionResponse,
-  ConversationType,
+  AICallTree,
   PerformanceAgent,
   PerformanceTraceContext,
   PerformanceTraceFormatter,
@@ -39,11 +38,9 @@ describeWithEnvironment('PerformanceAgent', () => {
   describe('buildRequest', () => {
     it('builds a request with a model id', async () => {
       mockHostConfig('test model');
-      const agent = new PerformanceAgent(
-          {
-            aidaClient: {} as Host.AidaClient.AidaClient,
-          },
-          ConversationType.PERFORMANCE_CALL_TREE);
+      const agent = new PerformanceAgent({
+        aidaClient: {} as Host.AidaClient.AidaClient,
+      });
       assert.strictEqual(
           agent.buildRequest({text: 'test input'}, Host.AidaClient.Role.USER).options?.model_id,
           'test model',
@@ -52,11 +49,9 @@ describeWithEnvironment('PerformanceAgent', () => {
 
     it('builds a request with a temperature', async () => {
       mockHostConfig('test model', 1);
-      const agent = new PerformanceAgent(
-          {
-            aidaClient: {} as Host.AidaClient.AidaClient,
-          },
-          ConversationType.PERFORMANCE_CALL_TREE);
+      const agent = new PerformanceAgent({
+        aidaClient: {} as Host.AidaClient.AidaClient,
+      });
       assert.strictEqual(
           agent.buildRequest({text: 'test input'}, Host.AidaClient.Role.USER).options?.temperature,
           1,
@@ -66,12 +61,10 @@ describeWithEnvironment('PerformanceAgent', () => {
     it('structure matches the snapshot', async () => {
       mockHostConfig('test model');
       sinon.stub(crypto, 'randomUUID').returns('sessionId' as `${string}-${string}-${string}-${string}-${string}`);
-      const agent = new PerformanceAgent(
-          {
-            aidaClient: mockAidaClient([[{explanation: 'answer'}]]),
-            serverSideLoggingEnabled: true,
-          },
-          ConversationType.PERFORMANCE_CALL_TREE);
+      const agent = new PerformanceAgent({
+        aidaClient: mockAidaClient([[{explanation: 'answer'}]]),
+        serverSideLoggingEnabled: true,
+      });
 
       await Array.fromAsync(agent.run('question', {selected: null}));
       setUserAgentForTesting();
@@ -123,30 +116,21 @@ describeWithEnvironment('PerformanceAgent – call tree focus', () => {
       // A basic Layout.
       const layoutEvt = allThreadEntriesInTrace(parsedTrace).find(event => event.ts === 465457096322);
       assert.exists(layoutEvt);
-      const aiCallTree = TimelineUtils.AICallTree.AICallTree.fromEvent(layoutEvt, parsedTrace);
+      const aiCallTree = AICallTree.fromEvent(layoutEvt, parsedTrace);
       assert.exists(aiCallTree);
 
-      const agent = new PerformanceAgent(
-          {
-            aidaClient: mockAidaClient([[{
-              explanation: 'This is the answer',
-              metadata: {
-                rpcGlobalId: 123,
-              },
-            }]]),
+      const agent = new PerformanceAgent({
+        aidaClient: mockAidaClient([[{
+          explanation: 'This is the answer',
+          metadata: {
+            rpcGlobalId: 123,
           },
-          ConversationType.PERFORMANCE_CALL_TREE);
+        }]]),
+      });
 
       const context = PerformanceTraceContext.fromCallTree(aiCallTree);
       const responses = await Array.fromAsync(agent.run('test', {selected: context}));
-      const expectedData = '\n\n' +
-          `
-
-
-# Call tree:
-
-1;Task;3;;;2
-2;Layout;3;3;;;S`.trim();
+      const expectedData = new PerformanceTraceFormatter(context.getItem()).formatTraceSummary();
 
       assert.deepEqual(responses, [
         {
@@ -157,9 +141,9 @@ describeWithEnvironment('PerformanceAgent – call tree focus', () => {
         },
         {
           type: ResponseType.CONTEXT,
-          title: 'Analyzing call tree',
+          title: 'Analyzing trace',
           details: [
-            {title: 'Selected call tree', text: expectedData},
+            {title: 'Trace', text: expectedData},
           ],
         },
         {
@@ -190,17 +174,15 @@ describeWithEnvironment('PerformanceAgent – call tree focus', () => {
 
   describe('enhanceQuery', () => {
     it('does not send the serialized calltree again if it is a followup chat about the same calltree', async () => {
-      const agent = new PerformanceAgent(
-          {
-            aidaClient: {} as Host.AidaClient.AidaClient,
-          },
-          ConversationType.PERFORMANCE_CALL_TREE);
+      const agent = new PerformanceAgent({
+        aidaClient: {} as Host.AidaClient.AidaClient,
+      });
 
       const mockAiCallTree = {
         serialize: () => 'Mock call tree',
         parsedTrace: FAKE_PARSED_TRACE,
         rootNode: {event: {ts: 0, dur: 0}},
-      } as unknown as TimelineUtils.AICallTree.AICallTree;
+      } as unknown as AICallTree;
 
       const context1 = PerformanceTraceContext.fromCallTree(mockAiCallTree);
       const context2 = PerformanceTraceContext.fromCallTree(mockAiCallTree);
@@ -263,50 +245,59 @@ const FAKE_PARSED_TRACE = {
   metadata: FAKE_METADATA,
 } as unknown as Trace.TraceModel.ParsedTrace;
 
-function createAgentForInsightConversation(opts: {aidaClient?: Host.AidaClient.AidaClient} = {}) {
-  return new PerformanceAgent({aidaClient: opts.aidaClient ?? mockAidaClient()}, ConversationType.PERFORMANCE_INSIGHT);
+function createAgentForConversation(opts: {aidaClient?: Host.AidaClient.AidaClient} = {}) {
+  const agent = new PerformanceAgent({aidaClient: opts.aidaClient ?? mockAidaClient()});
+  const context = PerformanceTraceContext.fromParsedTrace(FAKE_PARSED_TRACE);
+  agent.run('', {selected: context});
+  return agent;
 }
 
-describeWithEnvironment('PerformanceAgent – insight focus', () => {
+describeWithEnvironment('PerformanceAgent', () => {
+  it('uses the min and max bounds of the trace as the origin', async function() {
+    const parsedTrace = await TraceLoader.traceEngine(this, 'lcp-images.json.gz');
+    const context = PerformanceTraceContext.fromParsedTrace(parsedTrace);
+    assert.strictEqual(context.getOrigin(), 'trace-658799706428-658804825864');
+  });
+
   it('outputs the right title for the selected insight', async () => {
     const context = PerformanceTraceContext.fromInsight(FAKE_PARSED_TRACE, FAKE_LCP_MODEL);
-    assert.strictEqual(context.getTitle(), 'Trace: www.example.com');
+    assert.strictEqual(context.getTitle(), 'Trace: www.example.com – LCP breakdown');
   });
 
   // See b/405054694 for context on why we do this.
   describe('parsing text responses', () => {
     it('strips out 5 backticks if the response has them', async () => {
-      const agent = createAgentForInsightConversation();
+      const agent = createAgentForConversation();
       const response = agent.parseTextResponse('`````hello world`````');
       assert.deepEqual(response, {answer: 'hello world'});
     });
 
     it('strips any newlines before the backticks', async () => {
-      const agent = createAgentForInsightConversation();
+      const agent = createAgentForConversation();
       const response = agent.parseTextResponse('\n\n`````hello world`````');
       assert.deepEqual(response, {answer: 'hello world'});
     });
 
     it('does not strip the backticks if the response does not fully start and end with them', async () => {
-      const agent = createAgentForInsightConversation();
+      const agent = createAgentForConversation();
       const response = agent.parseTextResponse('answer: `````hello world`````');
       assert.deepEqual(response, {answer: 'answer: `````hello world`````'});
     });
 
     it('does not strip the backticks in the middle of the response even if the response is also wrapped', async () => {
-      const agent = createAgentForInsightConversation();
+      const agent = createAgentForConversation();
       const response = agent.parseTextResponse('`````hello ````` world`````');
       assert.deepEqual(response, {answer: 'hello ````` world'});
     });
 
     it('does not strip out inline code backticks', async () => {
-      const agent = createAgentForInsightConversation();
+      const agent = createAgentForConversation();
       const response = agent.parseTextResponse('This is code `console.log("hello")`');
       assert.deepEqual(response, {answer: 'This is code `console.log("hello")`'});
     });
 
     it('does not strip out code block 3 backticks', async () => {
-      const agent = createAgentForInsightConversation();
+      const agent = createAgentForConversation();
       const response = agent.parseTextResponse(`\`\`\`
 code
 \`\`\``);
@@ -323,7 +314,7 @@ code
       const parsedTrace = await TraceLoader.traceEngine(this, 'lcp-images.json.gz');
       assert.isOk(parsedTrace.insights);
       const context = PerformanceTraceContext.fromInsight(parsedTrace, FAKE_LCP_MODEL);
-      const agent = createAgentForInsightConversation({
+      const agent = createAgentForConversation({
         aidaClient: mockAidaClient([[{
           explanation: 'This is the answer',
           metadata: {
@@ -332,9 +323,7 @@ code
         }]])
       });
 
-      const expectedDetailText =
-          new PerformanceTraceFormatter(context.getItem(), new Trace.EventsSerializer.EventsSerializer())
-              .formatTraceSummary();
+      const expectedDetailText = new PerformanceTraceFormatter(context.getItem()).formatTraceSummary();
 
       const responses = await Array.fromAsync(agent.run('test', {selected: context}));
       assert.deepEqual(responses, [
@@ -367,7 +356,7 @@ code
 
   describe('enhanceQuery', () => {
     it('adds the context to the query from the user', async () => {
-      const agent = createAgentForInsightConversation({
+      const agent = createAgentForConversation({
         aidaClient: {} as Host.AidaClient.AidaClient,
       });
 
@@ -379,7 +368,7 @@ code
     });
 
     it('does not add the context for follow-up queries with the same context', async () => {
-      const agent = createAgentForInsightConversation({
+      const agent = createAgentForConversation({
         aidaClient: {} as Host.AidaClient.AidaClient,
       });
 
@@ -393,7 +382,7 @@ code
     });
 
     it('does add context to queries if the insight context changes', async () => {
-      const agent = createAgentForInsightConversation({
+      const agent = createAgentForConversation({
         aidaClient: {} as Host.AidaClient.AidaClient,
       });
       const context1 = PerformanceTraceContext.fromInsight(FAKE_PARSED_TRACE, FAKE_LCP_MODEL);
@@ -415,7 +404,7 @@ code
       const [firstNav] = parsedTrace.data.Meta.mainFrameNavigations;
       const lcpBreakdown = getInsightOrError('LCPBreakdown', parsedTrace.insights, firstNav);
       const bounds = parsedTrace.data.Meta.traceBounds;
-      const agent = createAgentForInsightConversation({
+      const agent = createAgentForConversation({
         aidaClient: mockAidaClient([
           [{
             explanation: '',
@@ -442,7 +431,7 @@ code
         assert.isOk(match, `no request found for ${url}`);
       });
 
-      const formatter = new PerformanceTraceFormatter(context.getItem(), new Trace.EventsSerializer.EventsSerializer());
+      const formatter = new PerformanceTraceFormatter(context.getItem());
       const expectedRequestsOutput = formatter.formatNetworkTrackSummary(bounds);
 
       const expectedBytesSize = Platform.StringUtilities.countWtf8Bytes(expectedRequestsOutput);
@@ -470,7 +459,7 @@ code
       const [firstNav] = parsedTrace.data.Meta.mainFrameNavigations;
       const lcpBreakdown = getInsightOrError('LCPBreakdown', parsedTrace.insights, firstNav);
       const bounds = parsedTrace.data.Meta.traceBounds;
-      const agent = createAgentForInsightConversation({
+      const agent = createAgentForConversation({
         aidaClient: mockAidaClient([
           [{
             explanation: '',
@@ -489,7 +478,7 @@ code
       const action = responses.find(response => response.type === ResponseType.ACTION);
       assert.exists(action);
 
-      const formatter = new PerformanceTraceFormatter(context.getItem(), new Trace.EventsSerializer.EventsSerializer());
+      const formatter = new PerformanceTraceFormatter(context.getItem());
       const summary = formatter.formatMainThreadTrackSummary(bounds);
       assert.isOk(summary);
 
@@ -512,7 +501,7 @@ code
       const [firstNav] = parsedTrace.data.Meta.mainFrameNavigations;
       const lcpBreakdown = getInsightOrError('LCPBreakdown', parsedTrace.insights, firstNav);
       const renderBlocking = getInsightOrError('RenderBlocking', parsedTrace.insights, firstNav);
-      const agent = createAgentForInsightConversation({
+      const agent = createAgentForConversation({
         aidaClient: mockAidaClient([
           [{explanation: '', functionCalls: [{name: 'getMainThreadTrackSummary', args: {}}]}],
         ])
@@ -522,12 +511,12 @@ code
 
       // Populate the function calls for the LCP Context
       await Array.fromAsync(agent.run('test 1 LCP', {selected: lcpContext}));
-      assert.strictEqual(agent.currentFacts().size, 6);  // always adds 6 facts for high-level summary of trace.
+      assert.strictEqual(agent.currentFacts().size, 7);  // always adds 7 facts for high-level summary of trace.
       await Array.fromAsync(agent.run('test 2 LCP', {selected: lcpContext}));
-      assert.strictEqual(agent.currentFacts().size, 7);  // added the function call as a fact.
+      assert.strictEqual(agent.currentFacts().size, 8);  // added the function call as a fact.
       // Now change the context and send a request.
       await Array.fromAsync(agent.run('test 1 RenderBlocking', {selected: renderBlockingContext}));
-      assert.strictEqual(agent.currentFacts().size, 6);  // back to 6.
+      assert.strictEqual(agent.currentFacts().size, 7);  // back to 7.
     });
 
     it('will cache function calls as facts', async function() {
@@ -535,7 +524,7 @@ code
       assert.isOk(parsedTrace.insights);
       const [firstNav] = parsedTrace.data.Meta.mainFrameNavigations;
       const lcpBreakdown = getInsightOrError('LCPBreakdown', parsedTrace.insights, firstNav);
-      const agent = createAgentForInsightConversation({
+      const agent = createAgentForConversation({
         aidaClient: mockAidaClient([
           [{explanation: '', functionCalls: [{name: 'getMainThreadTrackSummary', args: {}}]}],
           [{explanation: '', functionCalls: [{name: 'getNetworkTrackSummary', args: {}}]}], [{explanation: 'done'}]
@@ -544,7 +533,7 @@ code
       const context = PerformanceTraceContext.fromInsight(parsedTrace, lcpBreakdown);
       await Array.fromAsync(agent.run('test 1', {selected: context}));
       await Array.fromAsync(agent.run('test 2', {selected: context}));
-      // First 6 are the always included high-level facts. The rests are from the function calls.
+      // First 7 are the always included high-level facts. The rests are from the function calls.
       assert.deepEqual(
           Array.from(
               agent.currentFacts(),
@@ -552,18 +541,10 @@ code
                 return fact.metadata.source;
               }),
           [
-            'devtools', 'devtools', 'devtools', 'devtools', 'devtools', 'devtools',
+            'devtools', 'devtools', 'devtools', 'devtools', 'devtools', 'devtools', 'devtools',
             'getMainThreadTrackSummary({min: 197695826524, max: 197698633660})',
             'getNetworkTrackSummary({min: 197695826524, max: 197698633660})'
           ]);
     });
-  });
-});
-
-describeWithEnvironment('PerformanceAgent – all focus', () => {
-  it('uses the min and max bounds of the trace as the origin', async function() {
-    const parsedTrace = await TraceLoader.traceEngine(this, 'lcp-images.json.gz');
-    const context = PerformanceTraceContext.full(parsedTrace);
-    assert.strictEqual(context.getOrigin(), 'trace-658799706428-658804825864');
   });
 });

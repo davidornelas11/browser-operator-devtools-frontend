@@ -242,7 +242,7 @@ export class TabbedPane extends Common.ObjectWrapper.eventMixin<EventTypes, type
 
     const focused = this.hasFocus();
     for (let i = 0; i < ids.length; ++i) {
-      this.innerCloseTab(ids[i], userGesture);
+      this.#closeTab(ids[i], userGesture);
     }
     this.requestUpdate();
     if (this.tabsHistory.length) {
@@ -253,7 +253,7 @@ export class TabbedPane extends Common.ObjectWrapper.eventMixin<EventTypes, type
     }
   }
 
-  private innerCloseTab(id: string, userGesture?: boolean): true|undefined {
+  #closeTab(id: string, userGesture?: boolean): true|undefined {
     const tab = this.tabsById.get(id);
     if (!tab) {
       return;
@@ -325,6 +325,8 @@ export class TabbedPane extends Common.ObjectWrapper.eventMixin<EventTypes, type
     if (!tab) {
       return false;
     }
+
+    this.lastSelectedOverflowTab = tab;
 
     const eventData: EventData = {
       prevTabId: this.currentTab ? this.currentTab.id : undefined,
@@ -676,7 +678,6 @@ export class TabbedPane extends Common.ObjectWrapper.eventMixin<EventTypes, type
   }
 
   private dropDownMenuItemSelected(tab: TabbedPaneTab): void {
-    this.lastSelectedOverflowTab = tab;
     this.selectTab(tab.id, true, true);
   }
 

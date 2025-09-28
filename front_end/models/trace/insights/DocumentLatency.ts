@@ -81,7 +81,7 @@ const TARGET_MS = 100;
 // Threshold for compression savings.
 const IGNORE_THRESHOLD_IN_BYTES = 1400;
 
-export function isDocumentLatency(x: InsightModel): x is DocumentLatencyInsightModel {
+export function isDocumentLatencyInsight(x: InsightModel): x is DocumentLatencyInsightModel {
   return x.insightKey === 'DocumentLatency';
 }
 
@@ -195,6 +195,8 @@ export function generateInsight(
     return finalize({});
   }
 
+  const millisToString = context.options.insightTimeFormatters?.milli ?? i18n.TimeUtilities.millisToString;
+
   const documentRequest = data.NetworkRequests.byId.get(context.navigationId);
   if (!documentRequest) {
     return finalize({warnings: [InsightWarning.NO_DOCUMENT_REQUEST]});
@@ -212,7 +214,8 @@ export function generateInsight(
     overallSavingsMs = Math.max(serverResponseTime - TARGET_MS, 0);
   }
 
-  const redirectDuration = Math.round(documentRequest.args.data.syntheticData.redirectionDuration / 1000);
+  const redirectDuration =
+      Math.round(documentRequest.args.data.syntheticData.redirectionDuration / 1000) as Types.Timing.Milli;
   overallSavingsMs += redirectDuration;
 
   const metricSavings = {
@@ -237,16 +240,14 @@ export function generateInsight(
         noRedirects: {
           label: noRedirects ? i18nString(UIStrings.passingRedirects) : i18nString(UIStrings.failedRedirects, {
             PH1: documentRequest.args.data.redirects.length,
-            PH2: i18n.TimeUtilities.millisToString(redirectDuration),
+            PH2: millisToString(redirectDuration),
           }),
           value: noRedirects
         },
         serverResponseIsFast: {
           label: serverResponseIsFast ?
-              i18nString(
-                  UIStrings.passingServerResponseTime, {PH1: i18n.TimeUtilities.millisToString(serverResponseTime)}) :
-              i18nString(
-                  UIStrings.failedServerResponseTime, {PH1: i18n.TimeUtilities.millisToString(serverResponseTime)}),
+              i18nString(UIStrings.passingServerResponseTime, {PH1: millisToString(serverResponseTime)}) :
+              i18nString(UIStrings.failedServerResponseTime, {PH1: millisToString(serverResponseTime)}),
           value: serverResponseIsFast
         },
         usesCompression: {

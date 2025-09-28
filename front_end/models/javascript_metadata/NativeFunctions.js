@@ -6088,7 +6088,7 @@ export const NativeFunctions = [
   },
   {
     name: "addAnimation",
-    signatures: [["animation"]]
+    signatures: [["animation","action","behavior"]]
   },
   {
     name: "removeAnimation",
@@ -6766,6 +6766,10 @@ export const NativeFunctions = [
     signatures: [["type","?eventInitDict"]]
   },
   {
+    name: "EmailVerifiedEvent",
+    signatures: [["type","?eventInitDict"]]
+  },
+  {
     name: "ErrorEvent",
     signatures: [["type","?eventInitDict"]]
   },
@@ -7274,6 +7278,10 @@ export const NativeFunctions = [
     signatures: [["tool_name"]]
   },
   {
+    name: "provideContext",
+    signatures: [["params"]]
+  },
+  {
     name: "SnapEvent",
     signatures: [["type","?eventInitDict"]]
   },
@@ -7605,7 +7613,7 @@ export const NativeFunctions = [
     signatures: [["element","x","y","?dwidth","?dheight"]]
   },
   {
-    name: "drawHTML",
+    name: "drawElementImage",
     signatures: [["element","x","y","?dwidth","?dheight"]]
   },
   {
@@ -8421,10 +8429,6 @@ export const NativeFunctions = [
     signatures: [["worker","?options","?transfer"]]
   },
   {
-    name: "sendRtp",
-    signatures: [["packet","options"]]
-  },
-  {
     name: "setHeaderExtensionsToNegotiate",
     signatures: [["extensions"]]
   },
@@ -8470,7 +8474,7 @@ export const NativeFunctions = [
   },
   {
     name: "submitPrintJob",
-    signatures: [["job_name","document","attributes"]]
+    signatures: [["job_name","document_data","attributes"]]
   },
   {
     name: "PushEvent",
@@ -8891,7 +8895,7 @@ export const NativeFunctions = [
     signatures: [["provokeMode"]]
   },
   {
-    name: "texHTML2D",
+    name: "texElementImage2D",
     signatures: [["target","level","internalformat","format","type","element"]]
   },
   {

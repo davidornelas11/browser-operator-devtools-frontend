@@ -23,7 +23,7 @@ export enum SubscriptionTier {
   PRO_MONTHLY = 'SUBSCRIPTION_TIER_PRO_MONTHLY',
 }
 
-enum EligibilityStatus {
+export enum EligibilityStatus {
   ELIGIBLE = 'ELIGIBLE',
   NOT_ELIGIBLE = 'NOT_ELIGIBLE',
 }
@@ -68,6 +68,11 @@ export interface Profile {
   };
 }
 
+interface InitializeResult {
+  hasProfile: boolean;
+  isEligible: boolean;
+}
+
 // The `batchGet` awards endpoint returns badge names with an
 // obfuscated user ID (e.g., `profiles/12345/awards/badge-name`).
 // This function normalizes them to use `me` instead of the ID
@@ -80,7 +85,7 @@ function normalizeBadgeName(name: string): string {
 export const GOOGLE_DEVELOPER_PROGRAM_PROFILE_LINK = 'https://developers.google.com/profile/u/me';
 
 async function makeHttpRequest<R extends object>(request: DispatchHttpRequestRequest): Promise<R|null> {
-  if (!Root.Runtime.hostConfig.devToolsGdpProfiles?.enabled) {
+  if (!isGdpProfilesAvailable()) {
     return null;
   }
 
@@ -114,9 +119,20 @@ export class GdpClient {
     return gdpClientInstance;
   }
 
-  async initialize(): Promise<void> {
-    void this.getProfile();
-    void this.checkEligibility();
+  async initialize(): Promise<InitializeResult> {
+    const profile = await this.getProfile();
+    if (profile) {
+      return {
+        hasProfile: true,
+        isEligible: true,
+      };
+    }
+
+    const isEligible = await this.isEligibleToCreateProfile();
+    return {
+      hasProfile: false,
+      isEligible,
+    };
   }
 
   async getProfile(): Promise<Profile|null> {
@@ -129,7 +145,12 @@ export class GdpClient {
       path: '/v1beta1/profile:get',
       method: 'GET',
     });
-    return await this.#cachedProfilePromise;
+
+    const profile = await this.#cachedProfilePromise;
+    if (profile) {
+      this.#cachedEligibilityPromise = Promise.resolve({createProfile: EligibilityStatus.ELIGIBLE});
+    }
+    return profile;
   }
 
   async checkEligibility(): Promise<CheckElibigilityResponse|null> {
@@ -222,6 +243,21 @@ function setDebugGdpIntegrationEnabled(enabled: boolean): void {
   } else {
     localStorage.removeItem('debugGdpIntegrationEnabled');
   }
+}
+
+export function isGdpProfilesAvailable(): boolean {
+  const isBaseFeatureEnabled = Boolean(Root.Runtime.hostConfig.devToolsGdpProfiles?.enabled);
+  const isBrandedBuild = Boolean(Root.Runtime.hostConfig.devToolsGdpProfilesAvailability?.enabled);
+  const isOffTheRecordProfile = Root.Runtime.hostConfig.isOffTheRecord;
+  const isDisabledByEnterprisePolicy =
+      getGdpProfilesEnterprisePolicy() === Root.Runtime.GdpProfilesEnterprisePolicyValue.DISABLED;
+  return isBaseFeatureEnabled && isBrandedBuild && !isOffTheRecordProfile && !isDisabledByEnterprisePolicy;
+}
+
+export function getGdpProfilesEnterprisePolicy(): Root.Runtime.GdpProfilesEnterprisePolicyValue {
+  return (
+      Root.Runtime.hostConfig.devToolsGdpProfilesAvailability?.enterprisePolicyValue ??
+      Root.Runtime.GdpProfilesEnterprisePolicyValue.DISABLED);
 }
 
 // @ts-expect-error

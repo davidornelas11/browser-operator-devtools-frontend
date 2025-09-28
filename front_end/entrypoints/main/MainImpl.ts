@@ -127,6 +127,7 @@ const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
 let loadedPanelCommonModule: typeof PanelCommon|undefined;
 export class MainImpl {
   #readyForTestPromise = Promise.withResolvers<void>();
+  #veStartPromise!: Promise<void>;
 
   constructor() {
     MainImpl.instanceForTest = this;
@@ -184,11 +185,12 @@ export class MainImpl {
           clickLogThrottler: new Common.Throttler.Throttler(10),
           resizeLogThrottler: new Common.Throttler.Throttler(10),
         };
-        void VisualLogging.startLogging(options);
+        this.#veStartPromise = VisualLogging.startLogging(options);
       } else {
-        void VisualLogging.startLogging();
+        this.#veStartPromise = VisualLogging.startLogging();
       }
     }
+
     void this.#createAppUI();
   }
 
@@ -356,8 +358,6 @@ export class MainImpl {
         Root.Runtime.ExperimentName.TIMELINE_SHOW_POST_MESSAGE_EVENTS,
         'Performance panel: show postMessage dispatch and handling flows',
     );
-    Root.Runtime.experiments.register(
-        Root.Runtime.ExperimentName.TIMELINE_SAVE_AS_GZ, 'Performance panel: enable saving traces as .gz');
 
     Root.Runtime.experiments.enableExperimentsByDefault([
       Root.Runtime.ExperimentName.FULL_ACCESSIBILITY_TREE,
@@ -518,8 +518,13 @@ export class MainImpl {
     this.#registerMessageSinkListener();
 
     // Initialize `GDPClient` and `UserBadges` for Google Developer Program integration
-    if (Root.Runtime.hostConfig.devToolsGdpProfiles?.enabled) {
-      void Host.GdpClient.GdpClient.instance().initialize();
+    if (Host.GdpClient.isGdpProfilesAvailable()) {
+      void Host.GdpClient.GdpClient.instance().initialize().then(({hasProfile, isEligible}) => {
+        const contextString = hasProfile ? 'has-profile' :
+            isEligible                   ? 'no-profile-and-eligible' :
+                                           'no-profile-and-not-eligible';
+        void VisualLogging.logFunctionCall('gdp-client-initialize', contextString);
+      });
       void Badges.UserBadges.instance().initialize();
       Badges.UserBadges.instance().addEventListener(Badges.Events.BADGE_TRIGGERED, async ev => {
         loadedPanelCommonModule ??= await import('../../panels/common/common.js') as typeof PanelCommon;
@@ -586,6 +591,7 @@ export class MainImpl {
     for (const runnableInstanceFunction of Common.Runnable.earlyInitializationRunnables()) {
       await runnableInstanceFunction().run();
     }
+    await this.#veStartPromise;
     // Used for browser tests.
     Host.InspectorFrontendHost.InspectorFrontendHostInstance.readyForTest();
     this.#readyForTestPromise.resolve();

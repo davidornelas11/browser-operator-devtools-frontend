@@ -8,7 +8,7 @@ import {TraceLoader} from '../../../testing/TraceLoader.js';
 import * as Trace from '../trace.js';
 
 describeWithEnvironment('DuplicatedJavaScript', function() {
-  it('works (external source maps)', async () => {
+  it('works (external source maps)', async function() {
     const {data, insights} = await processTrace(this, 'dupe-js.json.gz');
     assert.strictEqual(insights.size, 1);
     const insight = getInsightOrError(
@@ -103,7 +103,7 @@ describeWithEnvironment('DuplicatedJavaScript', function() {
     // The original trace here was recorded at a time where sourceMapUrl could be a
     // large data url.
     for (const event of fileContents.traceEvents) {
-      if (Trace.Types.Events.isV8SourceRundownEvent(event)) {
+      if (Trace.Types.Events.isRundownScript(event)) {
         const {sourceMapUrl, url} = event.args.data;
         if (sourceMapUrl?.startsWith('data:') && url) {
           const sourceMap = await (await fetch(sourceMapUrl)).json();

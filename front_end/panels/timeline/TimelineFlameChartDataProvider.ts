@@ -6,6 +6,7 @@
 import * as Common from '../../core/common/common.js';
 import * as i18n from '../../core/i18n/i18n.js';
 import * as Root from '../../core/root/root.js';
+import * as AIAssistance from '../../models/ai_assistance/ai_assistance.js';
 import * as Trace from '../../models/trace/trace.js';
 import * as SourceMapsResolver from '../../models/trace_source_maps_resolver/trace_source_maps_resolver.js';
 import * as Workspace from '../../models/workspace/workspace.js';
@@ -151,8 +152,12 @@ export class TimelineFlameChartDataProvider extends Common.ObjectWrapper.ObjectW
     [this.droppedFramePattern, this.partialFramePattern] = this.preparePatternCanvas();
 
     this.framesGroupStyle = this.buildGroupStyle({useFirstLineForOverview: true});
-    this.screenshotsGroupStyle =
-        this.buildGroupStyle({useFirstLineForOverview: true, nestingLevel: 1, collapsible: false, itemsHeight: 150});
+    this.screenshotsGroupStyle = this.buildGroupStyle({
+      useFirstLineForOverview: true,
+      nestingLevel: 1,
+      collapsible: PerfUI.FlameChart.GroupCollapsibleState.NEVER,
+      itemsHeight: 150
+    });
 
     ThemeSupport.ThemeSupport.instance().addEventListener(ThemeSupport.ThemeChangeEvent.eventName, () => {
       const headers = [
@@ -247,12 +252,9 @@ export class TimelineFlameChartDataProvider extends Common.ObjectWrapper.ObjectW
 
     const contextMenu = new UI.ContextMenu.ContextMenu(mouseEvent);
     if (perfAIEntryPointEnabled && this.parsedTrace) {
-      const aiCallTree = Utils.AICallTree.AICallTree.fromEvent(entry, this.parsedTrace);
-      if (aiCallTree) {
+      const callTree = AIAssistance.AICallTree.fromEvent(entry, this.parsedTrace);
+      if (callTree) {
         const action = UI.ActionRegistry.ActionRegistry.instance().getAction(PERF_AI_ACTION_ID);
-        // The other side of setFlavor is handleTraceEntryNodeFlavorChange() in FreestylerPanel
-        const context = Utils.AIContext.AgentFocus.fromCallTree(aiCallTree);
-        UI.Context.Context.instance().setFlavor(Utils.AIContext.AgentFocus, context);
 
         if (Root.Runtime.hostConfig.devToolsAiSubmenuPrompts?.enabled) {
           function appendSubmenuPromptAction(
@@ -421,7 +423,7 @@ export class TimelineFlameChartDataProvider extends Common.ObjectWrapper.ObjectW
     const defaultGroupStyle = {
       padding: 4,
       height: 17,
-      collapsible: true,
+      collapsible: PerfUI.FlameChart.GroupCollapsibleState.ALWAYS,
       color: ThemeSupport.ThemeSupport.instance().getComputedValue('--sys-color-on-surface'),
       backgroundColor: ThemeSupport.ThemeSupport.instance().getComputedValue('--sys-color-cdt-base-container'),
       nestingLevel: 0,
@@ -768,7 +770,8 @@ export class TimelineFlameChartDataProvider extends Common.ObjectWrapper.ObjectW
       return;
     }
 
-    this.framesGroupStyle.collapsible = hasScreenshots;
+    this.framesGroupStyle.collapsible =
+        hasScreenshots ? PerfUI.FlameChart.GroupCollapsibleState.ALWAYS : PerfUI.FlameChart.GroupCollapsibleState.NEVER;
     const expanded = Root.Runtime.Runtime.queryParam('flamechart-force-expand') === 'frames';
 
     this.appendHeader(i18nString(UIStrings.frames), this.framesGroupStyle, false /* selectable */, expanded);

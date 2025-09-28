@@ -7,6 +7,7 @@ import * as Host from '../../core/host/host.js';
 import * as Platform from '../../core/platform/platform.js';
 import * as SDK from '../../core/sdk/sdk.js';
 import * as AiAssistanceModel from '../../models/ai_assistance/ai_assistance.js';
+import * as Badges from '../../models/badges/badges.js';
 import * as NetworkTimeCalculator from '../../models/network_time_calculator/network_time_calculator.js';
 import type * as Trace from '../../models/trace/trace.js';
 import * as Workspace from '../../models/workspace/workspace.js';
@@ -25,6 +26,7 @@ import {
   updateHostConfig
 } from '../../testing/EnvironmentHelpers.js';
 import {expectCall} from '../../testing/ExpectStubCall.js';
+import {stubFileManager} from '../../testing/FileManagerHelpers.js';
 import {describeWithMockConnection} from '../../testing/MockConnection.js';
 import {MockStore} from '../../testing/MockSettingStorage.js';
 import {createNetworkPanelForMockConnection} from '../../testing/NetworkHelpers.js';
@@ -34,7 +36,6 @@ import * as UI from '../../ui/legacy/legacy.js';
 import * as Network from '../network/network.js';
 import type * as TimelineComponents from '../timeline/components/components.js';
 import * as Timeline from '../timeline/timeline.js';
-import * as TimelineUtils from '../timeline/utils/utils.js';
 
 import * as AiAssistancePanel from './ai_assistance.js';
 
@@ -53,7 +54,7 @@ describeWithMockConnection('AI Assistance Panel', () => {
     UI.Context.Context.instance().setFlavor(Timeline.TimelinePanel.TimelinePanel, null);
     UI.Context.Context.instance().setFlavor(SDK.NetworkRequest.NetworkRequest, null);
     UI.Context.Context.instance().setFlavor(SDK.DOMModel.DOMNode, null);
-    UI.Context.Context.instance().setFlavor(TimelineUtils.AIContext.AgentFocus, null);
+    UI.Context.Context.instance().setFlavor(AiAssistanceModel.AgentFocus, null);
     UI.Context.Context.instance().setFlavor(Workspace.UISourceCode.UISourceCode, null);
 
     const mockStore = new MockStore();
@@ -273,23 +274,12 @@ describeWithMockConnection('AI Assistance Panel', () => {
         action: 'drjones.network-floating-button'
       },
       {
-        flavor: TimelineUtils.AIContext.AgentFocus,
+        flavor: AiAssistanceModel.AgentFocus,
         createContext: () => {
-          const parsedTrace = {insights: new Map()} as Trace.TraceModel.ParsedTrace;
-          return AiAssistanceModel.PerformanceTraceContext.full(parsedTrace);
+          const parsedTrace = {insights: new Map(), data: {Meta: {mainFrameId: ''}}} as Trace.TraceModel.ParsedTrace;
+          return AiAssistanceModel.PerformanceTraceContext.fromParsedTrace(parsedTrace);
         },
         action: 'drjones.performance-panel-context'
-      },
-      {
-        flavor: TimelineUtils.AIContext.AgentFocus,
-        createContext: () => {
-          // @ts-expect-error: don't need any data.
-          const context = AiAssistanceModel.PerformanceTraceContext.fromInsight({insights: new Map()}, new Map());
-          sinon.stub(AiAssistanceModel.PerformanceTraceContext.prototype, 'getSuggestions')
-              .returns(Promise.resolve([{title: 'test suggestion'}]));
-          return context;
-        },
-        action: 'drjones.performance-insight-context'
       },
       {
         flavor: Workspace.UISourceCode.UISourceCode,
@@ -359,14 +349,14 @@ describeWithMockConnection('AI Assistance Panel', () => {
       const {panel, view} = await createAiAssistancePanel({chatView});
 
       // Firstly, start a conversation and set a context
-      const fakeParsedTrace = {insights: new Map()} as Trace.TraceModel.ParsedTrace;
-      const context = AiAssistanceModel.PerformanceTraceContext.full(fakeParsedTrace);
-      UI.Context.Context.instance().setFlavor(TimelineUtils.AIContext.AgentFocus, context.getItem());
+      const fakeParsedTrace = {insights: new Map(), data: {Meta: {mainFrameId: ''}}} as Trace.TraceModel.ParsedTrace;
+      const context = AiAssistanceModel.PerformanceTraceContext.fromParsedTrace(fakeParsedTrace);
+      UI.Context.Context.instance().setFlavor(AiAssistanceModel.AgentFocus, context.getItem());
       panel.handleAction('drjones.performance-panel-context');
       await view.nextInput;
 
       // Now clear the context and check we cleared out the text
-      UI.Context.Context.instance().setFlavor(TimelineUtils.AIContext.AgentFocus, null);
+      UI.Context.Context.instance().setFlavor(AiAssistanceModel.AgentFocus, null);
       sinon.assert.callCount(chatView.clearTextInput, 1);
     });
   });
@@ -406,6 +396,24 @@ describeWithMockConnection('AI Assistance Panel', () => {
       UI.Context.Context.instance().setFlavor(Workspace.UISourceCode.UISourceCode, uiSourceCode);
 
       sinon.assert.callCount(view, callCount);
+    });
+  });
+
+  describe('AI explorer badge', () => {
+    it('should trigger started-ai-conversation action', async () => {
+      const recordActionSpy = sinon.spy(Badges.UserBadges.instance(), 'recordAction');
+      const {panel, view} = await createAiAssistancePanel(
+          {aidaClient: mockAidaClient([[{explanation: 'test'}], [{explanation: 'test'}]])});
+
+      panel.handleAction('freestyler.elements-floating-button');
+      (await view.nextInput).onTextSubmit('test');
+
+      sinon.assert.calledOnceWithExactly(recordActionSpy, Badges.BadgeAction.STARTED_AI_CONVERSATION);
+
+      (await view.nextInput).onTextSubmit('test 2');
+      await view.nextInput;
+
+      sinon.assert.calledOnce(recordActionSpy);
     });
   });
 
@@ -566,7 +574,7 @@ describeWithMockConnection('AI Assistance Panel', () => {
          view.input.onNewChatClick();
 
          assert.deepEqual((await view.nextInput).messages, []);
-         assert.deepEqual(view.input.conversationType, AiAssistanceModel.ConversationType.PERFORMANCE_INSIGHT);
+         assert.deepEqual(view.input.conversationType, AiAssistanceModel.ConversationType.PERFORMANCE);
        });
 
     it('should select the Dr Jones performance agent if insights are not enabled', async () => {
@@ -603,7 +611,7 @@ describeWithMockConnection('AI Assistance Panel', () => {
       view.input.onNewChatClick();
 
       assert.deepEqual((await view.nextInput).messages, []);
-      assert.deepEqual(view.input.conversationType, AiAssistanceModel.ConversationType.PERFORMANCE_CALL_TREE);
+      assert.deepEqual(view.input.conversationType, AiAssistanceModel.ConversationType.PERFORMANCE);
     });
 
     it('should switch agents and restore history', async () => {
@@ -1198,7 +1206,7 @@ describeWithMockConnection('AI Assistance Panel', () => {
           },
           {
             panelName: 'timeline',
-            expectedConversationType: AiAssistanceModel.ConversationType.PERFORMANCE_CALL_TREE,
+            expectedConversationType: AiAssistanceModel.ConversationType.PERFORMANCE,
             featureFlagName: 'devToolsAiAssistancePerformanceAgent',
           }
         ];
@@ -1292,7 +1300,7 @@ describeWithMockConnection('AI Assistance Panel', () => {
                new Timeline.TimelinePanel.SelectedInsight({} as unknown as TimelineComponents.Sidebar.ActiveInsight));
            const {view} = await createAiAssistancePanel();
 
-           assert.strictEqual(view.input.conversationType, AiAssistanceModel.ConversationType.PERFORMANCE_INSIGHT);
+           assert.strictEqual(view.input.conversationType, AiAssistanceModel.ConversationType.PERFORMANCE);
          });
 
       it('should select the PERFORMANCE agent when the performance panel is open and insights are enabled but the user has not selected an insight',
@@ -1309,7 +1317,7 @@ describeWithMockConnection('AI Assistance Panel', () => {
            UI.Context.Context.instance().setFlavor(Timeline.TimelinePanel.SelectedInsight, null);
 
            const {view} = await createAiAssistancePanel();
-           assert.strictEqual(view.input.conversationType, AiAssistanceModel.ConversationType.PERFORMANCE_CALL_TREE);
+           assert.strictEqual(view.input.conversationType, AiAssistanceModel.ConversationType.PERFORMANCE);
          });
     });
   });
@@ -1482,7 +1490,7 @@ describeWithMockConnection('AI Assistance Panel', () => {
 
            assert.isNull((await view.nextInput).selectedContext);
            assert.isTrue(view.input.isTextInputDisabled);
-           assert.strictEqual(view.input.inputPlaceholder, 'Select an item to ask a question');
+           assert.strictEqual(view.input.inputPlaceholder, 'Record or select a performance trace to ask a question');
          });
 
       it('shows the right placeholder for the performance agent when the user has a trace and a selected item',
@@ -1498,16 +1506,17 @@ describeWithMockConnection('AI Assistance Panel', () => {
            viewManagerIsViewVisibleStub.callsFake(viewName => viewName === 'timeline');
            UI.Context.Context.instance().setFlavor(Timeline.TimelinePanel.TimelinePanel, timelinePanel);
 
-           const fakeParsedTrace = {insights: new Map()} as Trace.TraceModel.ParsedTrace;
-           const focus = TimelineUtils.AIContext.AgentFocus.full(fakeParsedTrace);
-           UI.Context.Context.instance().setFlavor(TimelineUtils.AIContext.AgentFocus, focus);
+           const fakeParsedTrace = {insights: new Map(), data: {Meta: {mainFrameId: ''}}} as
+               Trace.TraceModel.ParsedTrace;
+           const focus = AiAssistanceModel.AgentFocus.fromParsedTrace(fakeParsedTrace);
+           UI.Context.Context.instance().setFlavor(AiAssistanceModel.AgentFocus, focus);
 
            Common.Settings.moduleSetting('ai-assistance-enabled').set(true);
            const {panel, view} =
                await createAiAssistancePanel({aidaAvailability: Host.AidaClient.AidaAccessPreconditions.AVAILABLE});
            panel.handleAction('drjones.performance-panel-context');
 
-           assert.strictEqual(view.input.inputPlaceholder, 'Ask a question about the selected item and its call tree');
+           assert.strictEqual(view.input.inputPlaceholder, 'Ask a question about the selected performance trace');
            assert.isFalse(view.input.isTextInputDisabled);
          });
     });
@@ -1873,9 +1882,7 @@ describeWithEnvironment('AiAssistancePanel.ActionDelegate', () => {
     });
 
     it('should call the save function when export conversation button is clicked', async () => {
-      const fileManager = Workspace.FileManager.FileManager.instance();
-      const saveSpy = sinon.stub(fileManager, 'save');
-      const closeSpy = sinon.stub(fileManager, 'close');
+      const fileManager = stubFileManager();
       const {panel, view} = await createAiAssistancePanel({
         aidaClient: mockAidaClient([[{explanation: 'test'}]]),
       });
@@ -1884,16 +1891,15 @@ describeWithEnvironment('AiAssistancePanel.ActionDelegate', () => {
       await view.nextInput;
       await view.input.onExportConversationClick();
 
-      sinon.assert.calledOnce(saveSpy);
-      sinon.assert.calledOnce(closeSpy);
+      sinon.assert.calledOnce(fileManager.save);
+      sinon.assert.calledOnce(fileManager.close);
 
-      const [fileName] = saveSpy.getCall(0).args;
+      const [fileName] = fileManager.save.getCall(0).args;
       assert.strictEqual(fileName, 'devtools_test_question.md');
     });
 
     it('should truncate a long file name when exporting', async () => {
-      const fileManager = Workspace.FileManager.FileManager.instance();
-      const saveSpy = sinon.stub(fileManager, 'save');
+      const fileManager = stubFileManager();
       const {panel, view} = await createAiAssistancePanel({
         aidaClient: mockAidaClient([[{explanation: 'test'}]]),
       });
@@ -1903,9 +1909,10 @@ describeWithEnvironment('AiAssistancePanel.ActionDelegate', () => {
       await view.nextInput;
       await view.input.onExportConversationClick();
 
-      sinon.assert.calledOnce(saveSpy);
+      sinon.assert.calledOnce(fileManager.save);
+      sinon.assert.calledOnce(fileManager.close);
 
-      const [fileName] = saveSpy.getCall(0).args;
+      const [fileName] = fileManager.save.getCall(0).args;
       const expectedSnakeCase =
           'this_is_a_very_long_title_that_should_be_truncated_when_exporting_the_conversation_to_a_file';
       const prefix = 'devtools_';

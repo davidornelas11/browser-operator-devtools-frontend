@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 import type * as Platform from '../../../core/platform/platform.js';
+import type * as SDK from '../../../core/sdk/sdk.js';
 import type * as Protocol from '../../../generated/protocol.js';
 
 import type {Micro, Milli, Seconds, TraceWindowMicro} from './Timing.js';
@@ -207,7 +208,7 @@ export interface RunTask extends Complete {
   name: Name.RUN_TASK;
 }
 export function isRunTask(event: Event): event is RunTask {
-  return event.name === Name.RUN_TASK;
+  return event.name === Name.RUN_TASK && event.ph === Phase.COMPLETE;
 }
 
 export interface FireIdleCallback extends Complete {
@@ -1357,6 +1358,15 @@ export interface PairableAsyncInstant extends PairableAsync {
 export interface PairableAsyncEnd extends PairableAsync {
   ph: Phase.ASYNC_NESTABLE_END;
 }
+export function isPairableAsyncBegin(e: Event): e is PairableAsyncBegin {
+  return e.ph === Phase.ASYNC_NESTABLE_START;
+}
+export function isPairableAsyncEnd(e: Event): e is PairableAsyncEnd {
+  return e.ph === Phase.ASYNC_NESTABLE_END;
+}
+export function isPairableAsyncInstant(e: Event): e is PairableAsyncInstant {
+  return e.ph === Phase.ASYNC_NESTABLE_INSTANT;
+}
 
 export interface AnimationFrame extends PairableAsync {
   name: Name.ANIMATION_FRAME;
@@ -2072,7 +2082,7 @@ export function isEnd(event: Event): event is End {
 }
 
 export function isDispatch(event: Event): event is Dispatch {
-  return event.name === 'EventDispatch';
+  return event.name === 'EventDispatch' && event.ph === Phase.COMPLETE;
 }
 
 export function isInstant(event: Event): event is Instant {
@@ -2084,7 +2094,7 @@ export function isRendererEvent(event: Event): event is RendererEvent {
 }
 
 export function isFireIdleCallback(event: Event): event is FireIdleCallback {
-  return event.name === 'FireIdleCallback';
+  return event.name === 'FireIdleCallback' && event.ph === Phase.COMPLETE;
 }
 
 export function isSchedulePostMessage(event: Event): event is SchedulePostMessage {
@@ -2092,7 +2102,7 @@ export function isSchedulePostMessage(event: Event): event is SchedulePostMessag
 }
 
 export function isHandlePostMessage(event: Event): event is HandlePostMessage {
-  return event.name === Name.HANDLE_POST_MESSAGE;
+  return event.name === Name.HANDLE_POST_MESSAGE && event.ph === Phase.COMPLETE;
 }
 
 export function isUpdateCounters(event: Event): event is UpdateCounters {
@@ -2213,7 +2223,7 @@ export function isProfile(event: Event): event is Profile {
 }
 
 export function isSyntheticCpuProfile(event: Event): event is SyntheticCpuProfile {
-  return event.name === Name.CPU_PROFILE;
+  return event.name === Name.CPU_PROFILE && event.ph === Phase.COMPLETE;
 }
 
 export function isProfileChunk(event: Event): event is ProfileChunk {
@@ -2308,7 +2318,7 @@ export interface DidCommitSameDocumentNavigation extends Complete {
 }
 
 export function isDidCommitSameDocumentNavigation(event: Event): event is DidCommitSameDocumentNavigation {
-  return event.name === 'RenderFrameHostImpl::DidCommitSameDocumentNavigation';
+  return event.name === 'RenderFrameHostImpl::DidCommitSameDocumentNavigation' && event.ph === Phase.COMPLETE;
 }
 
 export function isMainFrameViewport(
@@ -2400,7 +2410,7 @@ export function isProfileCall(event: Event): event is SyntheticProfileCall {
   return 'callFrame' in event;
 }
 
-export interface Paint extends Complete {
+export interface Paint extends Event {
   name: Name.PAINT;
   args: Args&{
     data: ArgsData & {
@@ -2444,7 +2454,7 @@ export interface PaintImage extends Complete {
   };
 }
 export function isPaintImage(event: Event): event is PaintImage {
-  return event.name === Name.PAINT_IMAGE;
+  return event.name === Name.PAINT_IMAGE && event.ph === Phase.COMPLETE;
 }
 
 export interface ScrollLayer extends Complete {
@@ -2457,7 +2467,7 @@ export interface ScrollLayer extends Complete {
   };
 }
 export function isScrollLayer(event: Event): event is ScrollLayer {
-  return event.name === Name.SCROLL_LAYER;
+  return event.name === Name.SCROLL_LAYER && event.ph === Phase.COMPLETE;
 }
 
 export interface SetLayerTreeId extends Instant {
@@ -2472,7 +2482,7 @@ export interface SetLayerTreeId extends Instant {
 export function isSetLayerId(event: Event): event is SetLayerTreeId {
   return event.name === Name.SET_LAYER_TREE_ID;
 }
-export interface UpdateLayer extends Complete {
+export interface UpdateLayer extends Event {
   name: Name.UPDATE_LAYER;
   args: Args&{
     layerId: number,
@@ -2571,7 +2581,7 @@ export interface FireAnimationFrame extends Complete {
 }
 
 export function isFireAnimationFrame(event: Event): event is FireAnimationFrame {
-  return event.name === Name.FIRE_ANIMATION_FRAME;
+  return event.name === Name.FIRE_ANIMATION_FRAME && event.ph === Phase.COMPLETE;
 }
 
 export interface RequestAnimationFrame extends Instant {
@@ -2611,7 +2621,7 @@ export interface TimerFire extends Complete {
   };
 }
 export function isTimerFire(event: Event): event is TimerFire {
-  return event.name === Name.TIMER_FIRE;
+  return event.name === Name.TIMER_FIRE && event.ph === Phase.COMPLETE;
 }
 
 export interface RequestIdleCallback extends Instant {
@@ -2773,7 +2783,7 @@ export interface V8Compile extends Complete {
   };
 }
 export function isV8Compile(event: Event): event is V8Compile {
-  return event.name === Name.COMPILE;
+  return event.name === Name.COMPILE && event.ph === Phase.COMPLETE;
 }
 
 export interface FunctionCall extends Complete {
@@ -2781,11 +2791,12 @@ export interface FunctionCall extends Complete {
   args: Args&{
     data?: Partial<CallFrame>& {
       frame?: string,
+      isolate?: number,
     },
   };
 }
 export function isFunctionCall(event: Event): event is FunctionCall {
-  return event.name === Name.FUNCTION_CALL;
+  return event.name === Name.FUNCTION_CALL && event.ph === Phase.COMPLETE;
 }
 
 export interface SchedulePostTaskCallback extends Instant {
@@ -2816,7 +2827,7 @@ export interface RunPostTaskCallback extends Complete {
   };
 }
 export function isRunPostTaskCallback(event: Event): event is RunPostTaskCallback {
-  return event.name === Name.RUN_POST_TASK_CALLBACK;
+  return event.name === Name.RUN_POST_TASK_CALLBACK && event.ph === Phase.COMPLETE;
 }
 
 export interface AbortPostTaskCallback extends Complete {
@@ -2830,7 +2841,7 @@ export interface AbortPostTaskCallback extends Complete {
   };
 }
 export function isAbortPostTaskCallback(event: Event): event is RunPostTaskCallback {
-  return event.name === Name.ABORT_POST_TASK_CALLBACK;
+  return event.name === Name.ABORT_POST_TASK_CALLBACK && event.ph === Phase.COMPLETE;
 }
 
 /**
@@ -2894,7 +2905,7 @@ export interface ParseAuthorStyleSheet extends Complete {
 }
 
 export function isParseAuthorStyleSheetEvent(event: Event): event is ParseAuthorStyleSheet {
-  return event.name === Name.PARSE_AUTHOR_STYLE_SHEET;
+  return event.name === Name.PARSE_AUTHOR_STYLE_SHEET && event.ph === Phase.COMPLETE;
 }
 
 /**
@@ -3177,75 +3188,51 @@ export interface LegacyLayerPaintEventPicture {
   serializedPicture: string;
 }
 
-export interface TargetRundownEvent extends Event {
+/** Same as `TraceEventTargetRundown` in `EnhancedTracesParser` */
+export interface RundownScriptCompiled extends Event {
   cat: 'disabled-by-default-devtools.target-rundown';
-  name: 'ScriptCompiled';
+  name: SDK.EnhancedTracesParser.RundownScriptCompiled['name'];
   args: Args&{
-    data?: {
-      frame: Protocol.Page.FrameId,
-      frameType: string,
-      url: string,
-      isolate: string,
-      v8context: string,
-      origin: string,
-      scriptId: number,
-      isDefault?: boolean,
-      contextType?: string,
-    },
+    data?: SDK.EnhancedTracesParser.RundownScriptCompiled['args']['data'],
   };
 }
 
-export function isTargetRundownEvent(event: Event): event is TargetRundownEvent {
-  return event.cat === 'disabled-by-default-devtools.target-rundown' && event.name === 'ScriptCompiled';
+export function isRundownScriptCompiled(event: Event): event is RundownScriptCompiled {
+  return event.cat === 'disabled-by-default-devtools.target-rundown';
 }
 
-export interface V8SourceRundownEvent extends Event {
+/** Same as `TraceEventScriptRundown` in `EnhancedTracesParser` */
+export interface RundownScript extends Event {
   cat: 'disabled-by-default-devtools.v8-source-rundown';
-  name: 'ScriptCatchup';
+  name: SDK.EnhancedTracesParser.RundownScript['name'];
   args: Args&{
-    data: {
-      isolate: string,
-      executionContextId: Protocol.Runtime.ExecutionContextId,
-      scriptId: number,
-      hash: string,
-      isModule: boolean,
-      hasSourceUrl: boolean,
-      url?: string,
-      sourceUrl?: string,
-      sourceMapUrl?: string,
-      sourceMapUrlElided?: boolean,
-    },
+    data: SDK.EnhancedTracesParser.RundownScript['args']['data'],
   };
 }
 
-export function isV8SourceRundownEvent(event: Event): event is V8SourceRundownEvent {
+export function isRundownScript(event: Event): event is RundownScript {
   return event.cat === 'disabled-by-default-devtools.v8-source-rundown' && event.name === 'ScriptCatchup';
 }
 
-export interface V8SourceRundownSourcesScriptCatchupEvent extends Event {
+/** Same as `TraceEventScriptRundownSource` in `EnhancedTracesParser` */
+export interface RundownScriptSource extends Event {
   cat: 'disabled-by-default-devtools.v8-source-rundown-sources';
   name: 'ScriptCatchup';
   args: Args&{
-    data: {
-      isolate: string,
-      scriptId: number,
-      length: number,
-      sourceText: string,
-    },
+    data: SDK.EnhancedTracesParser.RundownScriptSource['args']['data'],
   };
 }
 
-export function isV8SourceRundownSourcesScriptCatchupEvent(event: Event):
-    event is V8SourceRundownSourcesScriptCatchupEvent {
+export function isRundownScriptSource(event: Event): event is RundownScriptSource {
   return event.cat === 'disabled-by-default-devtools.v8-source-rundown-sources' && event.name === 'ScriptCatchup';
 }
 
-export interface V8SourceRundownSourcesLargeScriptCatchupEvent extends Event {
+export interface RundownScriptSourceLarge extends Event {
   cat: 'disabled-by-default-devtools.v8-source-rundown-sources';
   name: 'LargeScriptCatchup';
   args: Args&{
     data: {
-      isolate: string,
+      isolate: number,
       scriptId: number,
       splitIndex: number,
       splitCount: number,
@@ -3254,23 +3241,22 @@ export interface V8SourceRundownSourcesLargeScriptCatchupEvent extends Event {
   };
 }
 
-export function isV8SourceRundownSourcesLargeScriptCatchupEvent(event: Event):
-    event is V8SourceRundownSourcesLargeScriptCatchupEvent {
+export function isRundownScriptSourceLarge(event: Event): event is RundownScriptSourceLarge {
   return event.cat === 'disabled-by-default-devtools.v8-source-rundown-sources' && event.name === 'LargeScriptCatchup';
 }
 
-export interface V8SourceRundownSourcesStubScriptCatchupEvent extends Event {
+export interface RundownScriptStub extends Event {
   cat: 'disabled-by-default-devtools.v8-source-rundown-sources';
   name: 'StubScriptCatchup';
   args: Args&{
     data: {
-      isolate: string,
+      isolate: number,
       scriptId: number,
     },
   };
 }
 
-export function isAnyScriptCatchupEvent(event: Event): event is V8SourceRundownSourcesScriptCatchupEvent|
-    V8SourceRundownSourcesLargeScriptCatchupEvent|V8SourceRundownSourcesStubScriptCatchupEvent {
+export function isAnyScriptSourceEvent(event: Event): event is RundownScriptSource|RundownScriptSourceLarge|
+    RundownScriptStub {
   return event.cat === 'disabled-by-default-devtools.v8-source-rundown-sources';
 }

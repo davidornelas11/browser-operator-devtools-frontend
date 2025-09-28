@@ -148,6 +148,10 @@ const UIStrings = {
    * @description Text in Network Log View Columns of the Network panel
    */
   remoteAddressSpace: 'Remote Address Space',
+  /**
+   * @description Text to show whether a request is ad-related
+   */
+  isAdRelated: 'Is Ad-Related',
 } as const;
 const str_ = i18n.i18n.registerUIStrings('panels/network/NetworkLogViewColumns.ts', UIStrings);
 const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
@@ -279,7 +283,7 @@ export class NetworkLogViewColumns {
 
     this.updateColumns();
     this.#dataGrid.addEventListener(DataGrid.DataGrid.Events.SORTING_CHANGED, this.sortHandler, this);
-    this.#dataGrid.setHeaderContextMenuCallback(this.innerHeaderContextMenu.bind(this));
+    this.#dataGrid.setHeaderContextMenuCallback(this.#headerContextMenu.bind(this));
 
     this.activeWaterfallSortId = WaterfallSortIds.StartTime;
     this.#dataGrid.markColumnAsSortedBy(INITIAL_SORT_COLUMN, DataGrid.DataGrid.Order.Ascending);
@@ -405,7 +409,7 @@ export class NetworkLogViewColumns {
     this.waterfallHeaderElement.addEventListener('click', waterfallHeaderClicked.bind(this));
     this.waterfallHeaderElement.addEventListener('contextmenu', event => {
       const contextMenu = new UI.ContextMenu.ContextMenu(event);
-      this.innerHeaderContextMenu(contextMenu);
+      this.#headerContextMenu(contextMenu);
       void contextMenu.show();
     });
     this.waterfallHeaderElement.createChild('div', 'hover-layer');
@@ -627,7 +631,7 @@ export class NetworkLogViewColumns {
     return fragment;
   }
 
-  private innerHeaderContextMenu(contextMenu: UI.ContextMenu.SubMenu): void {
+  #headerContextMenu(contextMenu: UI.ContextMenu.SubMenu): void {
     const columnConfigs = this.columns.filter(columnConfig => columnConfig.hideable);
     const nonRequestResponseHeaders =
         columnConfigs.filter(columnConfig => !columnConfig.isRequestHeader && !columnConfig.isResponseHeader);
@@ -1182,6 +1186,11 @@ const DEFAULT_COLUMNS = [
     isRequestHeader: true,
     title: i18n.i18n.lockedLazyString('User-Agent'),
     sortingFunction: NetworkRequestNode.RequestHeaderStringComparator.bind(null, 'user-agent'),
+  },
+  {
+    id: 'is-ad-related',
+    title: i18nLazyString(UIStrings.isAdRelated),
+    sortingFunction: NetworkRequestNode.IsAdRelatedComparator,
   },
   // This header is a placeholder to let datagrid know that it can be sorted by this column, but never shown.
   {

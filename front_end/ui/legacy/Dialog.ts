@@ -21,8 +21,8 @@ export class Dialog extends Common.ObjectWrapper.eventMixin<EventTypes, typeof G
   private focusRestorer: WidgetFocusRestorer|null = null;
   private closeOnEscape = true;
   private targetDocument: Document|null = null;
-  private readonly targetDocumentKeyDownHandler: (event: Event) => void;
-  private escapeKeyCallback: ((arg0: Event) => void)|null = null;
+  private readonly targetDocumentKeyDownHandler: (event: KeyboardEvent) => void;
+  private escapeKeyCallback: ((arg0: KeyboardEvent) => void)|null = null;
 
   constructor(jslogContext?: string) {
     super();
@@ -36,6 +36,12 @@ export class Dialog extends Common.ObjectWrapper.eventMixin<EventTypes, typeof G
     this.widget().setDefaultFocusedElement(this.contentElement);
     this.setPointerEventsBehavior(PointerEventsBehavior.BLOCKED_BY_GLASS_PANE);
     this.setOutsideClickCallback(event => {
+      // If there are stacked dialogs, we only want to
+      // handle the outside click for the top most dialog.
+      if (Dialog.getInstance() !== this) {
+        return;
+      }
+
       this.hide();
       event.consume(true);
     });
@@ -44,22 +50,35 @@ export class Dialog extends Common.ObjectWrapper.eventMixin<EventTypes, typeof G
   }
 
   static hasInstance(): boolean {
-    return Boolean(Dialog.instance);
+    return Dialog.dialogs.length > 0;
   }
 
+  /**
+   * If there is only one dialog, returns that.
+   * If there are stacked dialogs, returns the topmost one.
+   */
   static getInstance(): Dialog|null {
-    return Dialog.instance;
+    return Dialog.dialogs[Dialog.dialogs.length - 1] || null;
   }
 
-  override show(where?: Document|Element): void {
+  /**
+   * `stack` parameter is needed for being able to open a dialog on top
+   * of an existing dialog. The main reason is, Settings Tab is
+   * implemented as a Dialog. So, if we want to open a dialog on the
+   * Settings Tab, we need to stack it on top of that dialog.
+   *
+   * @param where Container element of the dialog.
+   * @param stack Whether to open this dialog on top of an existing dialog.
+   */
+  override show(where?: Document|Element, stack?: boolean): void {
     const document = (where instanceof Document ? where : (where || InspectorView.instance().element).ownerDocument);
     this.targetDocument = document;
     this.targetDocument.addEventListener('keydown', this.targetDocumentKeyDownHandler, true);
 
-    if (Dialog.instance) {
-      Dialog.instance.hide();
+    if (!stack && Dialog.dialogs.length) {
+      Dialog.dialogs.forEach(dialog => dialog.hide());
     }
-    Dialog.instance = this;
+    Dialog.dialogs.push(this);
     this.disableTabIndexOnElements(document);
     super.show(document);
     this.focusRestorer = new WidgetFocusRestorer(this.widget());
@@ -76,7 +95,10 @@ export class Dialog extends Common.ObjectWrapper.eventMixin<EventTypes, typeof G
     }
     this.restoreTabIndexOnElements();
     this.dispatchEventToListeners(Events.HIDDEN);
-    Dialog.instance = null;
+    const index = Dialog.dialogs.indexOf(this);
+    if (index !== -1) {
+      Dialog.dialogs.splice(index, 1);
+    }
   }
 
   setAriaLabel(label: string): void {
@@ -87,7 +109,7 @@ export class Dialog extends Common.ObjectWrapper.eventMixin<EventTypes, typeof G
     this.closeOnEscape = close;
   }
 
-  setEscapeKeyCallback(callback: (arg0: Event) => void): void {
+  setEscapeKeyCallback(callback: (arg0: KeyboardEvent) => void): void {
     this.escapeKeyCallback = callback;
   }
 
@@ -165,8 +187,11 @@ export class Dialog extends Common.ObjectWrapper.eventMixin<EventTypes, typeof G
     this.tabIndexMap.clear();
   }
 
-  private onKeyDown(event: Event): void {
-    const keyboardEvent = (event as KeyboardEvent);
+  private onKeyDown(event: KeyboardEvent): void {
+    const keyboardEvent = event;
+    if (Dialog.getInstance() !== this) {
+      return;
+    }
     if (keyboardEvent.keyCode === Keys.Esc.code && KeyboardShortcut.hasNoModifiers(event)) {
       if (this.escapeKeyCallback) {
         this.escapeKeyCallback(event);
@@ -183,7 +208,7 @@ export class Dialog extends Common.ObjectWrapper.eventMixin<EventTypes, typeof G
     }
   }
 
-  private static instance: Dialog|null = null;
+  private static dialogs: Dialog[] = [];
 }
 
 export const enum Events {

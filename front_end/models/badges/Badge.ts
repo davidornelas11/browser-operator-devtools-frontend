@@ -10,8 +10,15 @@ export enum BadgeAction {
   CSS_RULE_MODIFIED = 'css-rule-modified',
   DOM_ELEMENT_OR_ATTRIBUTE_EDITED = 'dom-element-or-attribute-edited',
   MODERN_DOM_BADGE_CLICKED = 'modern-dom-badge-clicked',
+  STARTED_AI_CONVERSATION = 'started-ai-conversation',
   // TODO(ergunsh): Instrument performance insight clicks.
   PERFORMANCE_INSIGHT_CLICKED = 'performance-insight-clicked',
+  DEBUGGER_PAUSED = 'debugger-paused',
+  BREAKPOINT_ADDED = 'breakpoint-added',
+  CONSOLE_PROMPT_EXECUTED = 'console-prompt-executed',
+  PERFORMANCE_RECORDING_STARTED = 'performance-recording-started',
+  NETWORK_SPEED_THROTTLED = 'network-speed-throttled',
+  RECORDER_RECORDING_STARTED = 'recorder-recording-started',
 }
 
 export type BadgeActionEvents = Record<BadgeAction, void>;
@@ -21,8 +28,12 @@ export interface BadgeContext {
   badgeActionEventTarget: Common.ObjectWrapper.ObjectWrapper<BadgeActionEvents>;
 }
 
+export interface TriggerOptions {
+  immediate?: boolean;
+}
+
 export abstract class Badge {
-  #onTriggerBadge: (badge: Badge) => void;
+  #onTriggerBadge: (badge: Badge, opts?: TriggerOptions) => void;
   #badgeActionEventTarget: Common.ObjectWrapper.ObjectWrapper<BadgeActionEvents>;
   #eventListeners: Common.EventTarget.EventDescriptor[] = [];
   #triggeredBefore = false;
@@ -31,6 +42,7 @@ export abstract class Badge {
   abstract readonly title: string;
   abstract readonly imageUri: string;
   abstract readonly interestedActions: readonly BadgeAction[];
+  abstract readonly jslogContext: string;
   readonly isStarterBadge: boolean = false;
 
   constructor(context: BadgeContext) {
@@ -39,14 +51,14 @@ export abstract class Badge {
   }
 
   abstract handleAction(action: BadgeAction): void;
-  protected trigger(): void {
+  protected trigger(opts?: TriggerOptions): void {
     if (this.#triggeredBefore) {
       return;
     }
 
     this.#triggeredBefore = true;
     this.deactivate();
-    this.#onTriggerBadge(this);
+    this.#onTriggerBadge(this, opts);
   }
 
   activate(): void {

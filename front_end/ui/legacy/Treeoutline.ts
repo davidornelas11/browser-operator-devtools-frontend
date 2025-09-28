@@ -55,6 +55,7 @@ import {
   deepElementFromPoint,
   enclosingNodeOrSelfWithNodeNameInArray,
   HTMLElementWithLightDOMTemplate,
+  InterceptBindingDirective,
   isEditing,
 } from './UIUtils.js';
 
@@ -1454,7 +1455,7 @@ export class TreeSearch < NodeT extends TreeNode<NodeT>,
     return this.#getNodeMatchMap().get(node) ?? [];
   }
 
-  highlight(ranges: TextUtils.TextRange.SourceRange[], selectedRange: TextUtils.TextRange.SourceRange|undefined):
+  static highlight(ranges: TextUtils.TextRange.SourceRange[], selectedRange: TextUtils.TextRange.SourceRange|undefined):
       ReturnType<typeof Lit.Directives.ref> {
     return Lit.Directives.ref(element => {
       if (element instanceof HTMLLIElement) {
@@ -1549,6 +1550,7 @@ class ActiveHighlights {
 class TreeViewTreeElement extends TreeElement {
   #activeHighlights = new ActiveHighlights();
   #clonedAttributes = new Set<string>();
+  #clonedClasses = new Set<string>();
 
   static #elementToTreeElement = new WeakMap<Node, TreeViewTreeElement>();
   readonly configElement: HTMLLIElement;
@@ -1569,7 +1571,9 @@ class TreeViewTreeElement extends TreeElement {
   refresh(): void {
     this.titleElement.textContent = '';
     this.#clonedAttributes.forEach(attr => this.listItemElement.attributes.removeNamedItem(attr));
+    this.#clonedClasses.forEach(className => this.listItemElement.classList.remove(className));
     this.#clonedAttributes.clear();
+    this.#clonedClasses.clear();
     for (let i = 0; i < this.configElement.attributes.length; ++i) {
       const attribute = this.configElement.attributes.item(i);
       if (attribute && attribute.name !== 'role' && SDK.DOMModel.ARIA_ATTRIBUTES.has(attribute.name)) {
@@ -1577,6 +1581,11 @@ class TreeViewTreeElement extends TreeElement {
         this.#clonedAttributes.add(attribute.name);
       }
     }
+    for (const className of this.configElement.classList) {
+      this.listItemElement.classList.add(className);
+      this.#clonedClasses.add(className);
+    }
+    InterceptBindingDirective.attachEventListeners(this.configElement, this.listItemElement);
 
     for (const child of this.configElement.childNodes) {
       if (child instanceof HTMLUListElement && child.role === 'group') {
@@ -1618,8 +1627,8 @@ function getTreeNodes(nodeList: NodeList|Node[]): HTMLLIElement[] {
 
 /**
  * A tree element that can be used as progressive enhancement over a <ul> element. A `template` IDL attribute allows
- * additionally to insert the <ul> into a <template>, avoiding rendering anything into light DOM. The <ul> itself will
- * be cloned into shadow DOM and rendered there.
+ * additionally to insert the <ul> into a <template>, avoiding rendering anything into light DOM, which is recommended.
+ * The <ul> itself will be cloned into shadow DOM and rendered there.
  *
  * ## Usage ##
  *
@@ -1663,12 +1672,17 @@ function getTreeNodes(nodeList: NodeList|Node[]): HTMLLIElement[] {
  *
  * ## Event Handling ##
  *
+ * This section is only relevant if NOT using the `template`.
+ *
  * Since config elements are cloned into the shadow DOM, it's not possible to directly attach event listeners to the
- * children of config elements. Instead, the `HTMLElementWithLightDOMTemplate.on` directive should be used as a wrapper:
+ * children of config elements. Instead, the `UI.UIUtils.InterceptBindingDirective` directive needs to be used as a
+ * wrapper:
  * ```
- * <li role="treeitem">
+ * const on = Lit.Directive.directive(UI.UIUtils.InterceptBindingDirective);
+ *
+ * html`<li role="treeitem">
  *   <button @click=${on(clickHandler)}>click me</button>
- * </li>
+ * </li>`
  * ```
  *
  * @property template Define the tree contents
@@ -1748,7 +1762,7 @@ export class TreeViewElement extends HTMLElementWithLightDOMTemplate {
     }
   }
 
-  protected override addNodes(nodes: NodeList|Node[]): void {
+  protected override addNodes(nodes: NodeList|Node[], nextSibling?: Node|null): void {
     for (const node of getTreeNodes(nodes)) {
       if (TreeViewTreeElement.get(node)) {
         continue;  // Not sure this can happen
@@ -1757,8 +1771,15 @@ export class TreeViewElement extends HTMLElementWithLightDOMTemplate {
       if (!parent) {
         continue;
       }
+      while (nextSibling && nextSibling.nodeType !== Node.ELEMENT_NODE) {
+        nextSibling = nextSibling.nextSibling;
+      }
+      const nextElement = nextSibling ? TreeViewTreeElement.get(nextSibling) : null;
+      const index = nextElement ? parent.treeElement.indexOfChild(nextElement) : parent.treeElement.children().length;
       const treeElement = new TreeViewTreeElement(this.#treeOutline, node);
-      parent.treeElement.appendChild(treeElement, /* FIXME comparator */);
+      const expandable = Boolean(node.querySelector('ul[role="group"]'));
+      treeElement.setExpandable(expandable);
+      parent.treeElement.insertChild(treeElement, index);
       if (hasBooleanAttribute(node, 'selected')) {
         treeElement.revealAndSelect(true);
       }

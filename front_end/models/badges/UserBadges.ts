@@ -4,9 +4,10 @@
 
 import * as Common from '../../core/common/common.js';
 import * as Host from '../../core/host/host.js';
+import * as Root from '../../core/root/root.js';
 
 import {AiExplorerBadge} from './AiExplorerBadge.js';
-import type {Badge, BadgeAction, BadgeActionEvents, BadgeContext} from './Badge.js';
+import type {Badge, BadgeAction, BadgeActionEvents, BadgeContext, TriggerOptions} from './Badge.js';
 import {CodeWhispererBadge} from './CodeWhispererBadge.js';
 import {DOMDetectiveBadge} from './DOMDetectiveBadge.js';
 import {SpeedsterBadge} from './SpeedsterBadge.js';
@@ -22,12 +23,20 @@ export interface EventTypes {
   [Events.BADGE_TRIGGERED]: Badge;
 }
 
+const SNOOZE_TIME_MS = 24 * 60 * 60 * 1000;  // 24 hours
+const MAX_SNOOZE_COUNT = 3;
+const DELAY_BEFORE_TRIGGER = 1500;
+
 let userBadgesInstance: UserBadges|undefined = undefined;
 export class UserBadges extends Common.ObjectWrapper.ObjectWrapper<EventTypes> {
   readonly #badgeActionEventTarget = new Common.ObjectWrapper.ObjectWrapper<BadgeActionEvents>();
 
   #receiveBadgesSetting: Common.Settings.Setting<Boolean>;
   #allBadges: Badge[];
+
+  #starterBadgeSnoozeCount: Common.Settings.Setting<number>;
+  #starterBadgeLastSnoozedTimestamp: Common.Settings.Setting<number>;
+  #starterBadgeDismissed: Common.Settings.Setting<boolean>;
 
   static readonly BADGE_REGISTRY: BadgeClass[] = [
     StarterBadge,
@@ -41,7 +50,18 @@ export class UserBadges extends Common.ObjectWrapper.ObjectWrapper<EventTypes> {
     super();
 
     this.#receiveBadgesSetting = Common.Settings.Settings.instance().moduleSetting('receive-gdp-badges');
+    if (Host.GdpClient.getGdpProfilesEnterprisePolicy() ===
+        Root.Runtime.GdpProfilesEnterprisePolicyValue.ENABLED_WITHOUT_BADGES) {
+      this.#receiveBadgesSetting.set(false);
+    }
     this.#receiveBadgesSetting.addChangeListener(this.#reconcileBadges, this);
+
+    this.#starterBadgeSnoozeCount = Common.Settings.Settings.instance().createSetting(
+        'starter-badge-snooze-count', 0, Common.Settings.SettingStorageType.SYNCED);
+    this.#starterBadgeLastSnoozedTimestamp = Common.Settings.Settings.instance().createSetting(
+        'starter-badge-last-snoozed-timestamp', 0, Common.Settings.SettingStorageType.SYNCED);
+    this.#starterBadgeDismissed = Common.Settings.Settings.instance().createSetting(
+        'starter-badge-dismissed', false, Common.Settings.SettingStorageType.SYNCED);
 
     this.#allBadges = UserBadges.BADGE_REGISTRY.map(badgeCtor => new badgeCtor({
                                                       onTriggerBadge: this.#onTriggerBadge.bind(this),
@@ -60,6 +80,15 @@ export class UserBadges extends Common.ObjectWrapper.ObjectWrapper<EventTypes> {
     return await this.#reconcileBadges();
   }
 
+  snoozeStarterBadge(): void {
+    this.#starterBadgeSnoozeCount.set(this.#starterBadgeSnoozeCount.get() + 1);
+    this.#starterBadgeLastSnoozedTimestamp.set(Date.now());
+  }
+
+  dismissStarterBadge(): void {
+    this.#starterBadgeDismissed.set(true);
+  }
+
   recordAction(action: BadgeAction): void {
     // `Common.ObjectWrapper.ObjectWrapper` does not allow passing unions to
     // the `dispatchEventToListeners` and `action` in this case is a union.
@@ -70,7 +99,8 @@ export class UserBadges extends Common.ObjectWrapper.ObjectWrapper<EventTypes> {
     this.#badgeActionEventTarget.dispatchEventToListeners(action);
   }
 
-  async #onTriggerBadge(badge: Badge): Promise<void> {
+  async #onTriggerBadge(badge: Badge, opts?: TriggerOptions): Promise<void> {
+    const triggerTime = Date.now();
     let shouldAwardBadge = false;
     // By default, we award non-starter badges directly when they are triggered.
     if (!badge.isStarterBadge) {
@@ -79,7 +109,8 @@ export class UserBadges extends Common.ObjectWrapper.ObjectWrapper<EventTypes> {
       const gdpProfile = await Host.GdpClient.GdpClient.instance().getProfile();
       const receiveBadgesSettingEnabled = Boolean(this.#receiveBadgesSetting.get());
       // If there is a GDP profile and the user has enabled receiving badges, we award the starter badge as well.
-      if (gdpProfile && receiveBadgesSettingEnabled) {
+      if (gdpProfile && receiveBadgesSettingEnabled && !this.#isStarterBadgeDismissed() &&
+          !this.#isStarterBadgeSnoozed()) {
         shouldAwardBadge = true;
       }
     }
@@ -92,7 +123,12 @@ export class UserBadges extends Common.ObjectWrapper.ObjectWrapper<EventTypes> {
       }
     }
 
-    this.dispatchEventToListeners(Events.BADGE_TRIGGERED, badge);
+    const timeElapsedAfterTriggerCall = Date.now() - triggerTime;
+    // We want to add exactly 1.5 second delay between the trigger action & the notification.
+    const delay = opts?.immediate ? 0 : Math.max(DELAY_BEFORE_TRIGGER - timeElapsedAfterTriggerCall, 0);
+    setTimeout(() => {
+      this.dispatchEventToListeners(Events.BADGE_TRIGGERED, badge);
+    }, delay);
   }
 
   #deactivateAllBadges(): void {
@@ -101,7 +137,17 @@ export class UserBadges extends Common.ObjectWrapper.ObjectWrapper<EventTypes> {
     });
   }
 
-  // TODO(ergunsh): Implement starter badge dismissal, snooze count & timestamp checks.
+  #isStarterBadgeDismissed(): boolean {
+    return this.#starterBadgeDismissed.get();
+  }
+
+  #isStarterBadgeSnoozed(): boolean {
+    const snoozeCount = this.#starterBadgeSnoozeCount.get();
+    const lastSnoozed = this.#starterBadgeLastSnoozedTimestamp.get();
+    const snoozedRecently = (Date.now() - lastSnoozed) < SNOOZE_TIME_MS;
+    return snoozeCount >= MAX_SNOOZE_COUNT || snoozedRecently;
+  }
+
   async #reconcileBadges(): Promise<void> {
     const syncInfo = await new Promise<Host.InspectorFrontendHostAPI.SyncInformation>(
         resolve => Host.InspectorFrontendHost.InspectorFrontendHostInstance.getSyncInformation(resolve));
@@ -111,10 +157,17 @@ export class UserBadges extends Common.ObjectWrapper.ObjectWrapper<EventTypes> {
       return;
     }
 
-    const [gdpProfile, isEligibleToCreateProfile] = await Promise.all([
-      Host.GdpClient.GdpClient.instance().getProfile(),
-      Host.GdpClient.GdpClient.instance().isEligibleToCreateProfile(),
-    ]);
+    if (!Host.GdpClient.isGdpProfilesAvailable() ||
+        Host.GdpClient.getGdpProfilesEnterprisePolicy() !== Root.Runtime.GdpProfilesEnterprisePolicyValue.ENABLED) {
+      this.#deactivateAllBadges();
+      return;
+    }
+
+    const gdpProfile = await Host.GdpClient.GdpClient.instance().getProfile();
+    let isEligibleToCreateProfile = Boolean(gdpProfile);
+    if (!gdpProfile) {
+      isEligibleToCreateProfile = await Host.GdpClient.GdpClient.instance().isEligibleToCreateProfile();
+    }
 
     // User does not have a GDP profile & not eligible to create one.
     // So, we don't activate any badges for them.
@@ -148,7 +201,8 @@ export class UserBadges extends Common.ObjectWrapper.ObjectWrapper<EventTypes> {
         continue;
       }
 
-      const shouldActivateStarterBadge = badge.isStarterBadge && isEligibleToCreateProfile;
+      const shouldActivateStarterBadge = badge.isStarterBadge && isEligibleToCreateProfile &&
+          !this.#isStarterBadgeDismissed() && !this.#isStarterBadgeSnoozed();
       const shouldActivateActivityBasedBadge =
           !badge.isStarterBadge && Boolean(gdpProfile) && receiveBadgesSettingEnabled;
       if (shouldActivateStarterBadge || shouldActivateActivityBasedBadge) {

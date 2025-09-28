@@ -544,8 +544,8 @@ export class StylePropertiesSection {
     }
   }
 
-  private onKeyDown(event: Event): void {
-    const keyboardEvent = (event as KeyboardEvent);
+  private onKeyDown(event: KeyboardEvent): void {
+    const keyboardEvent = event;
     if (UI.UIUtils.isEditing() || !this.editable || keyboardEvent.altKey || keyboardEvent.ctrlKey ||
         keyboardEvent.metaKey) {
       return;
@@ -796,6 +796,11 @@ export class StylePropertiesSection {
         case Protocol.CSS.CSSRuleType.StyleRule:
           ancestorRuleElement = this.createNestingElement(rule.nestingSelectors?.[nestingIndex++]);
           break;
+        case Protocol.CSS.CSSRuleType.StartingStyleRule:
+          if (Root.Runtime.hostConfig.devToolsStartingStyleDebugging?.enabled) {
+            ancestorRuleElement = this.createStartingStyleElement();
+          }
+          break;
       }
       if (ancestorRuleElement) {
         this.#ancestorRuleListElement.prepend(ancestorRuleElement);
@@ -915,6 +920,17 @@ export class StylePropertiesSection {
       jslogContext: 'scope',
     };
     return scopeElement;
+  }
+
+  protected createStartingStyleElement(/* startingStyle: SDK.CSSStartingStyle.CSSStartingStyle*/):
+      ElementsComponents.CSSQuery.CSSQuery|undefined {
+    const startingStyleElement = new ElementsComponents.CSSQuery.CSSQuery();
+    startingStyleElement.data = {
+      queryPrefix: '@starting-style',
+      queryText: '',
+      jslogContext: 'starting-style',
+    };
+    return startingStyleElement;
   }
 
   protected createSupportsElement(supports: SDK.CSSSupports.CSSSupports): ElementsComponents.CSSQuery.CSSQuery
@@ -1367,12 +1383,12 @@ export class StylePropertiesSection {
   private editingMediaTextCommittedForTest(): void {
   }
 
-  private handleSelectorClick(event: Event): void {
+  private handleSelectorClick(event: MouseEvent): void {
     const target = (event.target as Element | null);
     if (!target) {
       return;
     }
-    if (UI.KeyboardShortcut.KeyboardShortcut.eventHasCtrlEquivalentKey((event as MouseEvent)) && this.navigable &&
+    if (UI.KeyboardShortcut.KeyboardShortcut.eventHasCtrlEquivalentKey(event) && this.navigable &&
         target.classList.contains('simple-selector')) {
       const selectorIndex = this.elementToSelectorIndex.get(target);
       if (selectorIndex) {

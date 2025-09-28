@@ -2,20 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import * as CrUXManager from '../../../models/crux-manager/crux-manager.js';
 import * as Trace from '../../../models/trace/trace.js';
-import * as TimelineUtils from '../../../panels/timeline/utils/utils.js';
 import {describeWithEnvironment} from '../../../testing/EnvironmentHelpers.js';
 import {SnapshotTester} from '../../../testing/SnapshotTester.js';
 import {TraceLoader} from '../../../testing/TraceLoader.js';
-import {PerformanceTraceFormatter} from '../ai_assistance.js';
+import {AgentFocus, AICallTree, PerformanceTraceFormatter} from '../ai_assistance.js';
 
 async function createFormatter(context: Mocha.Context|Mocha.Suite|null, name: string):
     Promise<{formatter: PerformanceTraceFormatter, parsedTrace: Trace.TraceModel.ParsedTrace}> {
   const parsedTrace = await TraceLoader.traceEngine(context, name);
   assert.isOk(parsedTrace.insights);
-  const focus = TimelineUtils.AIContext.AgentFocus.full(parsedTrace);
-  const eventsSerializer = new Trace.EventsSerializer.EventsSerializer();
-  const formatter = new PerformanceTraceFormatter(focus, eventsSerializer);
+  const focus = AgentFocus.fromParsedTrace(parsedTrace);
+  const formatter = new PerformanceTraceFormatter(focus);
   return {formatter, parsedTrace};
 }
 
@@ -39,6 +38,22 @@ describeWithEnvironment('PerformanceTraceFormatter', () => {
 
     it('yahoo-news.json.gz', async function() {
       const {formatter} = await createFormatter(this, 'yahoo-news.json.gz');
+      const output = formatter.formatTraceSummary();
+      snapshotTester.assert(this, output);
+    });
+
+    it('deals with CrUX manager errors', async function() {
+      const {formatter} = await createFormatter(this, 'image-delivery.json.gz');
+      sinon.stub(CrUXManager.CrUXManager, 'instance').callsFake(() => {
+        throw new Error('something went wrong with CrUX Manager');
+      });
+      const output = formatter.formatTraceSummary();
+      snapshotTester.assert(this, output);
+    });
+
+    // This one has field data.
+    it('image-delivery.json.gz', async function() {
+      const {formatter} = await createFormatter(this, 'image-delivery.json.gz');
       const output = formatter.formatTraceSummary();
       snapshotTester.assert(this, output);
     });
@@ -92,9 +107,54 @@ describeWithEnvironment('PerformanceTraceFormatter', () => {
   it('formatCallTree', async function() {
     const {formatter, parsedTrace} = await createFormatter(this, 'long-task-from-worker-thread.json.gz');
     const event = new Trace.EventsSerializer.EventsSerializer().eventForKey('r-62', parsedTrace);
-    const tree = TimelineUtils.AICallTree.AICallTree.fromEvent(event, parsedTrace);
+    const tree = AICallTree.fromEvent(event, parsedTrace);
     assert.exists(tree);
     const output = formatter.formatCallTree(tree);
     snapshotTester.assert(this, output);
+  });
+
+  describe('formatNetworkRequests', () => {
+    it('formats network requests that have redirects', async function() {
+      const {formatter, parsedTrace} = await createFormatter(this, 'bad-document-request-latency.json.gz');
+      const requestUrl = 'http://localhost:3000/redirect3';
+      const request = parsedTrace.data.NetworkRequests.byTime.find(r => r.args.data.url === requestUrl);
+      assert.isOk(request);
+      const output = formatter.formatNetworkRequests([request], {verbose: true});
+      snapshotTester.assert(this, output);
+    });
+
+    it('formats network requests in verbose mode', async function() {
+      const {formatter, parsedTrace} = await createFormatter(this, 'lcp-images.json.gz');
+      const requestUrl = 'https://fonts.googleapis.com/css2?family=Poppins:ital,wght@1,800';
+      const request = parsedTrace.data.NetworkRequests.byTime.find(r => r.args.data.url === requestUrl);
+      assert.isOk(request);
+      const output = formatter.formatNetworkRequests([request], {verbose: true});
+      snapshotTester.assert(this, output);
+    });
+
+    it('defaults to verbose mode when 1 request and verbose option is not defined', async function() {
+      const {formatter, parsedTrace} = await createFormatter(this, 'lcp-images.json.gz');
+      const requestUrl = 'https://fonts.googleapis.com/css2?family=Poppins:ital,wght@1,800';
+      const request = parsedTrace.data.NetworkRequests.byTime.find(r => r.args.data.url === requestUrl);
+      assert.isOk(request);
+      const output = formatter.formatNetworkRequests([request]);
+      snapshotTester.assert(this, output);
+    });
+
+    it('formats in compressed mode if a request is duplicated in the array', async function() {
+      const {formatter, parsedTrace} = await createFormatter(this, 'bad-document-request-latency.json.gz');
+      const requests = parsedTrace.data.NetworkRequests.byTime;
+      // Duplicate request so that the compressed format is used
+      const output = formatter.formatNetworkRequests([requests[0], requests[0]]);
+      snapshotTester.assert(this, output);
+    });
+
+    it('correctly formats an initiator chain for network-requests-initiators trace', async function() {
+      const {formatter, parsedTrace} = await createFormatter(this, 'network-requests-initiators.json.gz');
+      const request = parsedTrace.data.NetworkRequests.byTime;
+      assert.isOk(request);
+      const output = formatter.formatNetworkRequests(request);
+      snapshotTester.assert(this, output);
+    });
   });
 });

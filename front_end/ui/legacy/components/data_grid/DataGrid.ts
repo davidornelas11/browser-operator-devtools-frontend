@@ -140,7 +140,7 @@ export class DataGridImpl<T> extends Common.ObjectWrapper.ObjectWrapper<EventTyp
   private dataTableHeaders: Record<string, Element>;
   scrollContainerInternal: Element;
   #dataContainer: Element;
-  private readonly dataTable: Element;
+  private readonly dataTable: HTMLTableElement;
   protected inline: boolean;
   private columnsArray: ColumnDescriptor[];
   columns: Record<string, ColumnDescriptor>;
@@ -212,7 +212,7 @@ export class DataGridImpl<T> extends Common.ObjectWrapper.ObjectWrapper<EventTyp
     this.columns = {};
     this.visibleColumnsArray = columnsArray;
 
-    columnsArray.forEach(column => this.innerAddColumn(column));
+    columnsArray.forEach(column => this.#addColumn(column));
 
     this.cellClass = null;
 
@@ -409,12 +409,12 @@ export class DataGridImpl<T> extends Common.ObjectWrapper.ObjectWrapper<EventTyp
     UI.ARIAUtils.LiveAnnouncer.alert(accessibleText);
   }
 
-  private innerAddColumn(column: ColumnDescriptor, position?: number): void {
+  #addColumn(column: ColumnDescriptor, position?: number): void {
     column.defaultWeight = column.weight;
 
     const columnId = column.id;
     if (columnId in this.columns) {
-      this.innerRemoveColumn(columnId);
+      this.#removeColumn(columnId);
     }
 
     if (position === undefined) {
@@ -472,10 +472,10 @@ export class DataGridImpl<T> extends Common.ObjectWrapper.ObjectWrapper<EventTyp
   }
 
   addColumn(column: ColumnDescriptor, position?: number): void {
-    this.innerAddColumn(column, position);
+    this.#addColumn(column, position);
   }
 
-  private innerRemoveColumn(columnId: string): void {
+  #removeColumn(columnId: string): void {
     const column = this.columns[columnId];
     if (!column) {
       return;
@@ -491,7 +491,7 @@ export class DataGridImpl<T> extends Common.ObjectWrapper.ObjectWrapper<EventTyp
   }
 
   removeColumn(columnId: string): void {
-    this.innerRemoveColumn(columnId);
+    this.#removeColumn(columnId);
   }
 
   setCellClass(cellClass: string): void {
@@ -1516,19 +1516,19 @@ export class DataGridImpl<T> extends Common.ObjectWrapper.ObjectWrapper<EventTyp
     void contextMenu.show();
   }
 
-  private clickInDataTable(event: Event): void {
+  private clickInDataTable(event: MouseEvent): void {
     const gridNode = this.dataGridNodeFromNode((event.target as Node));
-    if (!gridNode || !gridNode.hasChildren() || !gridNode.isEventWithinDisclosureTriangle((event as MouseEvent))) {
+    if (!gridNode || !gridNode.hasChildren() || !gridNode.isEventWithinDisclosureTriangle(event)) {
       return;
     }
 
     if (gridNode.expanded) {
-      if ((event as MouseEvent).altKey) {
+      if (event.altKey) {
         gridNode.collapseRecursively();
       } else {
         gridNode.collapse();
       }
-    } else if ((event as MouseEvent).altKey) {
+    } else if (event.altKey) {
       gridNode.expandRecursively();
     } else {
       gridNode.expand();

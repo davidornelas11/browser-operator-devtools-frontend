@@ -27,6 +27,7 @@ devtools_module("ai_assistance") {
     "components/ScrollPinHelper.ts",
     "components/ExploreWidget.ts",
     "components/MarkdownRendererWithCodeBlock.ts",
+    "components/PerformanceAgentMarkdownRenderer.ts",
     "components/UserActionRow.ts",
   ]
 

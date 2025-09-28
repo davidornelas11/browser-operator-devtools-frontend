@@ -2,29 +2,28 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import '../../../ui/components/icon_button/icon_button.js';
-
+import * as Common from '../../../core/common/common.js';
 import * as Host from '../../../core/host/host.js';
 import * as i18n from '../../../core/i18n/i18n.js';
 import * as Platform from '../../../core/platform/platform.js';
 import * as Root from '../../../core/root/root.js';
 import * as SDK from '../../../core/sdk/sdk.js';
-import * as TimelineUtils from '../../../panels/timeline/utils/utils.js';
+import * as Tracing from '../../../services/tracing/tracing.js';
 import * as Trace from '../../trace/trace.js';
-import type {ConversationType} from '../AiHistoryStorage.js';
+import {ConversationType} from '../AiHistoryStorage.js';
 import {
   PerformanceInsightFormatter,
-  TraceEventFormatter,
 } from '../data_formatters/PerformanceInsightFormatter.js';
 import {PerformanceTraceFormatter} from '../data_formatters/PerformanceTraceFormatter.js';
 import {debugLog} from '../debug.js';
+import {AICallTree} from '../performance/AICallTree.js';
+import {AgentFocus} from '../performance/AIContext.js';
 
 import {
-  type AgentOptions,
   AiAgent,
   type ContextResponse,
   ConversationContext,
-  type ConversationSuggestion,
+  type ConversationSuggestions,
   type ParsedResponse,
   type RequestOptions,
   type ResponseData,
@@ -36,7 +35,6 @@ const UIStringsNotTranslated = {
    *@description Shown when the agent is investigating a trace
    */
   analyzingTrace: 'Analyzing trace',
-  analyzingCallTree: 'Analyzing call tree',
   /**
    * @description Shown when the agent is investigating network activity
    */
@@ -61,7 +59,7 @@ const lockedString = i18n.i18n.lockedString;
  *
  * Check token length in https://aistudio.google.com/
  */
-const fullTracePreamble = `You are an assistant, expert in web performance and highly skilled with Chrome DevTools.
+const preamble = `You are an assistant, expert in web performance and highly skilled with Chrome DevTools.
 
 Your primary goal is to provide actionable advice to web developers about their web page by using the Chrome Performance Panel and analyzing a trace. You may need to diagnose problems yourself, or you may be given direction for what to focus on by the user.
 
@@ -80,6 +78,7 @@ The 3 main performance metrics are:
 
 Trace events referenced in the information given to you will be marked with an \`eventKey\`. For example: \`LCP element: <img src="..."> (eventKey: r-123, ts: 123456)\`
 You can use this key with \`getEventByKey\` to get more information about that trace event. For example: \`getEventByKey('r-123')\`
+You can also use this key with \`selectEventByKey\` to show the user a specific event
 
 ## Step-by-step instructions for debugging performance issues
 
@@ -127,27 +126,23 @@ Adhere to the following critical requirements:
 - Do not provide answers on non-web-development topics, such as legal, financial, medical, or personal advice.
 `;
 
-const callFrameDataFormatDescription = `Each call frame is presented in the following format:
+const extraPreambleWhenNotExternal = `Additional notes:
 
-'id;name;duration;selfTime;urlIndex;childRange;[S]'
+When referring to a trace event that has a corresponding \`eventKey\`, annotate your output using markdown link syntax. For example:
+- When referring to an event that is a long task: [Long task](#r-123)
+- When referring to a URL for which you know the eventKey of: [https://www.example.com](#s-1827)
+- Never show the eventKey (like "eventKey: s-1852"); instead, use a markdown link as described above.
 
-Key definitions:
+When asking the user to make a choice between multiple options, output a list of choices at the end of your text response. The format is \`SUGGESTIONS: ["suggestion1", "suggestion2", "suggestion3"]\`. This MUST start on a newline, and be a single line.
+`;
 
-* id: A unique numerical identifier for the call frame. Never mention this id in the output to the user.
-* name: A concise string describing the call frame (e.g., 'Evaluate Script', 'render', 'fetchData').
-* duration: The total execution time of the call frame, including its children.
-* selfTime: The time spent directly within the call frame, excluding its children's execution.
-* urlIndex: Index referencing the "All URLs" list. Empty if no specific script URL is associated.
-* childRange: Specifies the direct children of this node using their IDs. If empty ('' or 'S' at the end), the node has no children. If a single number (e.g., '4'), the node has one child with that ID. If in the format 'firstId-lastId' (e.g., '4-5'), it indicates a consecutive range of child IDs from 'firstId' to 'lastId', inclusive.
-* S: _Optional_. The letter 'S' terminates the line if that call frame was selected by the user.
+const extraPreambleWhenFreshTrace = `Additional notes:
 
-Example Call Tree:
-
-1;main;500;100;;
-2;update;200;50;;3
-3;animate;150;20;0;4-5;S
-4;calculatePosition;80;80;;
-5;applyStyles;50;50;;
+When referring to an element for which you know the nodeId, annotate your output using markdown link syntax:
+- For example, if nodeId is 23: [LCP element](#node-23)
+- This link will reveal the element in the Elements panel
+- Never mention node or nodeId when referring to the element, and especially not in the link text.
+- When referring to the LCP, it's useful to also mention what the LCP element is via its nodeId. Use the markdown link syntax to do so.
 `;
 
 enum ScorePriority {
@@ -156,59 +151,110 @@ enum ScorePriority {
   DEFAULT = 1,
 }
 
-export class PerformanceTraceContext extends ConversationContext<TimelineUtils.AIContext.AgentFocus> {
-  static full(parsedTrace: Trace.TraceModel.ParsedTrace): PerformanceTraceContext {
-    return new PerformanceTraceContext(TimelineUtils.AIContext.AgentFocus.full(parsedTrace));
+export class PerformanceTraceContext extends ConversationContext<AgentFocus> {
+  static fromParsedTrace(parsedTrace: Trace.TraceModel.ParsedTrace): PerformanceTraceContext {
+    return new PerformanceTraceContext(AgentFocus.fromParsedTrace(parsedTrace));
   }
 
   static fromInsight(parsedTrace: Trace.TraceModel.ParsedTrace, insight: Trace.Insights.Types.InsightModel):
       PerformanceTraceContext {
-    return new PerformanceTraceContext(TimelineUtils.AIContext.AgentFocus.fromInsight(parsedTrace, insight));
+    return new PerformanceTraceContext(AgentFocus.fromInsight(parsedTrace, insight));
   }
 
-  static fromCallTree(callTree: TimelineUtils.AICallTree.AICallTree): PerformanceTraceContext {
-    return new PerformanceTraceContext(TimelineUtils.AIContext.AgentFocus.fromCallTree(callTree));
+  static fromCallTree(callTree: AICallTree): PerformanceTraceContext {
+    return new PerformanceTraceContext(AgentFocus.fromCallTree(callTree));
   }
 
-  #focus: TimelineUtils.AIContext.AgentFocus;
+  #focus: AgentFocus;
+  external = false;
 
-  constructor(focus: TimelineUtils.AIContext.AgentFocus) {
+  constructor(focus: AgentFocus) {
     super();
     this.#focus = focus;
   }
 
   override getOrigin(): string {
-    const {min, max} = this.#focus.data.parsedTrace.data.Meta.traceBounds;
+    const {min, max} = this.#focus.parsedTrace.data.Meta.traceBounds;
     return `trace-${min}-${max}`;
   }
 
-  override getItem(): TimelineUtils.AIContext.AgentFocus {
+  override getItem(): AgentFocus {
     return this.#focus;
   }
 
   override getTitle(): string {
-    const focus = this.#focus.data;
+    const focus = this.#focus;
 
     let url = focus.insightSet?.url;
     if (!url) {
       url = new URL(focus.parsedTrace.data.Meta.mainFrameURL);
     }
 
-    return `Trace: ${url.hostname}`;
+    const parts = [`Trace: ${url.hostname}`];
+    if (focus.insight) {
+      parts.push(focus.insight.title);
+    }
+    if (focus.event) {
+      parts.push(Trace.Name.forEntry(focus.event));
+    }
+    if (focus.callTree) {
+      const node = focus.callTree.selectedNode ?? focus.callTree.rootNode;
+      parts.push(Trace.Name.forEntry(node.event));
+    }
+    return parts.join(' – ');
   }
 
   /**
    * Presents the default suggestions that are shown when the user first clicks
    * "Ask AI".
    */
-  override async getSuggestions(): Promise<[ConversationSuggestion, ...ConversationSuggestion[]]|undefined> {
-    const focus = this.#focus.data;
+  override async getSuggestions(): Promise<ConversationSuggestions|undefined> {
+    const focus = this.#focus;
 
-    if (focus.type !== 'insight') {
-      return;
+    if (focus.callTree) {
+      return [
+        {title: 'What\'s the purpose of this work?', jslogContext: 'performance-default'},
+        {title: 'Where is time being spent?', jslogContext: 'performance-default'},
+        {title: 'How can I optimize this?', jslogContext: 'performance-default'},
+      ];
     }
 
-    return new PerformanceInsightFormatter(focus.parsedTrace, focus.insight).getSuggestions();
+    if (focus.insight) {
+      return new PerformanceInsightFormatter(focus, focus.insight).getSuggestions();
+    }
+
+    const suggestions: ConversationSuggestions =
+        [{title: 'What performance issues exist with my page?', jslogContext: 'performance-default'}];
+
+    if (focus.insightSet) {
+      const lcp = focus.insightSet ? Trace.Insights.Common.getLCP(focus.insightSet) : null;
+      const cls = focus.insightSet ? Trace.Insights.Common.getCLS(focus.insightSet) : null;
+      const inp = focus.insightSet ? Trace.Insights.Common.getINP(focus.insightSet) : null;
+
+      const ModelHandlers = Trace.Handlers.ModelHandlers;
+      const GOOD = Trace.Handlers.ModelHandlers.PageLoadMetrics.ScoreClassification.GOOD;
+
+      if (lcp && ModelHandlers.PageLoadMetrics.scoreClassificationForLargestContentfulPaint(lcp.value) !== GOOD) {
+        suggestions.push({title: 'How can I improve LCP?', jslogContext: 'performance-default'});
+      }
+      if (inp && ModelHandlers.UserInteractions.scoreClassificationForInteractionToNextPaint(inp.value) !== GOOD) {
+        suggestions.push({title: 'How can I improve INP?', jslogContext: 'performance-default'});
+      }
+      if (cls && ModelHandlers.LayoutShifts.scoreClassificationForLayoutShift(cls.value) !== GOOD) {
+        suggestions.push({title: 'How can I improve CLS?', jslogContext: 'performance-default'});
+      }
+
+      // Add up to 3 suggestions from the top failing insights.
+      const top3FailingInsightSuggestions =
+          Object.values(focus.insightSet.model)
+              .filter(model => model.state !== 'pass')
+              .map(model => new PerformanceInsightFormatter(focus, model).getSuggestions().at(-1))
+              .filter(suggestion => !!suggestion)
+              .slice(0, 3);
+      suggestions.push(...top3FailingInsightSuggestions);
+    }
+
+    return suggestions;
   }
 }
 
@@ -216,28 +262,14 @@ export class PerformanceTraceContext extends ConversationContext<TimelineUtils.A
 const MAX_FUNCTION_RESULT_BYTE_LENGTH = 16384 * 4;
 
 /**
- * Union of all the performance conversation types, which are all implemented by this file.
- * This temporary until all Performance Panel AI features use the "Full" type. go/chrome-devtools:more-powerful-performance-agent-design
- */
-type PerformanceConversationType =
-    ConversationType.PERFORMANCE_FULL|ConversationType.PERFORMANCE_CALL_TREE|ConversationType.PERFORMANCE_INSIGHT;
-
-/**
  * One agent instance handles one conversation. Create a new agent
  * instance for a new conversation.
  */
-export class PerformanceAgent extends AiAgent<TimelineUtils.AIContext.AgentFocus> {
-  // TODO: would make more sense on AgentOptions
-  #conversationType: PerformanceConversationType;
+export class PerformanceAgent extends AiAgent<AgentFocus> {
   #formatter: PerformanceTraceFormatter|null = null;
+  #lastEventForEnhancedQuery: Trace.Types.Events.Event|undefined;
   #lastInsightForEnhancedQuery: Trace.Insights.Types.InsightModel|undefined;
-  #eventsSerializer = new Trace.EventsSerializer.EventsSerializer();
-  #lastFocusHandledForContextDetails: TimelineUtils.AIContext.AgentFocus|null = null;
-
-  constructor(opts: AgentOptions, conversationType: PerformanceConversationType) {
-    super(opts);
-    this.#conversationType = conversationType;
-  }
+  #hasShownAnalyzeTraceContext = false;
 
   /**
    * Cache of all function calls made by the agent. This allows us to include (as a
@@ -250,21 +282,28 @@ export class PerformanceAgent extends AiAgent<TimelineUtils.AIContext.AgentFocus
    *
    * The record key is the result of a function's displayInfoFromArgs.
    */
-  #functionCallCacheForFocus =
-      new Map<TimelineUtils.AIContext.AgentFocus, Record<string, Host.AidaClient.RequestFact>>();
+  #functionCallCacheForFocus = new Map<AgentFocus, Record<string, Host.AidaClient.RequestFact>>();
 
+  #notExternalExtraPreambleFact: Host.AidaClient.RequestFact = {
+    text: extraPreambleWhenNotExternal,
+    metadata: {source: 'devtools', score: ScorePriority.CRITICAL}
+  };
+  #freshTraceExtraPreambleFact: Host.AidaClient.RequestFact = {
+    text: extraPreambleWhenFreshTrace,
+    metadata: {source: 'devtools', score: ScorePriority.CRITICAL}
+  };
   #networkDataDescriptionFact: Host.AidaClient.RequestFact = {
-    text: TraceEventFormatter.networkDataFormatDescription,
+    text: PerformanceTraceFormatter.networkDataFormatDescription,
     metadata: {source: 'devtools', score: ScorePriority.CRITICAL}
   };
   #callFrameDataDescriptionFact: Host.AidaClient.RequestFact = {
-    text: callFrameDataFormatDescription,
+    text: PerformanceTraceFormatter.callFrameDataFormatDescription,
     metadata: {source: 'devtools', score: ScorePriority.CRITICAL}
   };
   #traceFacts: Host.AidaClient.RequestFact[] = [];
 
   get preamble(): string {
-    return fullTracePreamble;
+    return preamble;
   }
 
   get clientFeature(): Host.AidaClient.ClientFeature {
@@ -284,65 +323,31 @@ export class PerformanceAgent extends AiAgent<TimelineUtils.AIContext.AgentFocus
   }
 
   getConversationType(): ConversationType {
-    return this.#conversationType;
-  }
-
-  #lookupEvent(key: Trace.Types.File.SerializableKey): Trace.Types.Events.Event|null {
-    const parsedTrace = this.context?.getItem().data.parsedTrace;
-    if (!parsedTrace) {
-      return null;
-    }
-
-    try {
-      return this.#eventsSerializer.eventForKey(key, parsedTrace);
-    } catch (err) {
-      if (err.toString().includes('Unknown trace event')) {
-        return null;
-      }
-
-      throw err;
-    }
+    return ConversationType.PERFORMANCE;
   }
 
   async *
-      handleContextDetails(context: ConversationContext<TimelineUtils.AIContext.AgentFocus>|null):
-          AsyncGenerator<ContextResponse, void, void> {
+      handleContextDetails(context: ConversationContext<AgentFocus>|null): AsyncGenerator<ContextResponse, void, void> {
     if (!context) {
       return;
     }
 
-    const focus = context.getItem();
-    if (this.#lastFocusHandledForContextDetails === focus) {
+    if (this.#hasShownAnalyzeTraceContext) {
       return;
     }
 
-    this.#lastFocusHandledForContextDetails = focus;
+    yield {
+      type: ResponseType.CONTEXT,
+      title: lockedString(UIStringsNotTranslated.analyzingTrace),
+      details: [
+        {
+          title: 'Trace',
+          text: this.#formatter?.formatTraceSummary() ?? '',
+        },
+      ],
+    };
 
-    if (focus.data.type === 'full' || focus.data.type === 'insight') {
-      yield {
-        type: ResponseType.CONTEXT,
-        title: lockedString(UIStringsNotTranslated.analyzingTrace),
-        details: [
-          {
-            title: 'Trace',
-            text: this.#formatter?.formatTraceSummary() ?? '',
-          },
-        ],
-      };
-    } else if (focus.data.type === 'call-tree') {
-      yield {
-        type: ResponseType.CONTEXT,
-        title: lockedString(UIStringsNotTranslated.analyzingCallTree),
-        details: [
-          {
-            title: 'Selected call tree',
-            text: focus.data.callTree.serialize(),
-          },
-        ],
-      };
-    } else {
-      Platform.assertNever(focus.data, 'Unknown agent focus');
-    }
+    this.#hasShownAnalyzeTraceContext = true;
   }
 
   #callTreeContextSet = new WeakSet();
@@ -351,25 +356,79 @@ export class PerformanceAgent extends AiAgent<TimelineUtils.AIContext.AgentFocus
     return response.length > MAX_FUNCTION_RESULT_BYTE_LENGTH;
   }
 
-  override parseTextResponse(response: string): ParsedResponse {
+  /**
+   * Sometimes the model will output URLs as plaintext; or a markdown link
+   * where the link is the actual URL. This function transforms such output
+   * to an eventKey link.
+   *
+   * A simple way to see when this gets utilized is:
+   *   1. go to paulirish.com, record a trace
+   *   2. say "What performance issues exist with my page?"
+   *   3. then say "images"
+   */
+  #parseForKnownUrls(response: string): string {
+    const focus = this.context?.getItem();
+    if (!focus) {
+      return response;
+    }
+
+    // Regex with two main parts, separated by | (OR):
+    // 1. (\[(.*?)\]\((.*?)\)): Captures a full markdown link.
+    //    - Group 1: The whole link, e.g., "[text](url)"
+    //    - Group 2: The link text, e.g., "text"
+    //    - Group 3: The link destination, e.g., "url"
+    // 2. (https?:\/\/[^\s<>()]+): Captures a standalone URL.
+    //    - Group 4: The standalone URL, e.g., "https://google.com"
+    const urlRegex = /(\[(.*?)\]\((.*?)\))|(https?:\/\/[^\s<>()]+)/g;
+
+    return response.replace(urlRegex, (match, markdownLink, linkText, linkDest, standaloneUrlText) => {
+      if (markdownLink) {
+        if (linkDest.startsWith('#')) {
+          return match;
+        }
+      }
+
+      const urlText = linkDest ?? standaloneUrlText;
+      if (!urlText) {
+        return match;
+      }
+
+      const request = focus.parsedTrace.data.NetworkRequests.byTime.find(request => request.args.data.url === urlText);
+      if (!request) {
+        return match;
+      }
+
+      const eventKey = focus.eventsSerializer.keyForEvent(request);
+      if (!eventKey) {
+        return match;
+      }
+
+      return `[${urlText}](#${eventKey})`;
+    });
+  }
+
+  #parseMarkdown(response: string): string {
     /**
      * Sometimes the LLM responds with code chunks that wrap a text based markdown response.
      * If this happens, we want to remove those before continuing.
      * See b/405054694 for more details.
      */
-    const trimmed = response.trim();
     const FIVE_BACKTICKS = '`````';
-    if (trimmed.startsWith(FIVE_BACKTICKS) && trimmed.endsWith(FIVE_BACKTICKS)) {
-      // Purposefully use the trimmed text here; we might as well remove any
-      // newlines that are at the very start or end.
-      const stripped = trimmed.slice(FIVE_BACKTICKS.length, -FIVE_BACKTICKS.length);
-      return super.parseTextResponse(stripped);
+    if (response.startsWith(FIVE_BACKTICKS) && response.endsWith(FIVE_BACKTICKS)) {
+      return response.slice(FIVE_BACKTICKS.length, -FIVE_BACKTICKS.length);
     }
-    return super.parseTextResponse(response);
+
+    return response;
   }
 
-  override async enhanceQuery(query: string, context: ConversationContext<TimelineUtils.AIContext.AgentFocus>|null):
-      Promise<string> {
+  override parseTextResponse(response: string): ParsedResponse {
+    const parsedResponse = super.parseTextResponse(response);
+    parsedResponse.answer = this.#parseForKnownUrls(parsedResponse.answer);
+    parsedResponse.answer = this.#parseMarkdown(parsedResponse.answer);
+    return parsedResponse;
+  }
+
+  override async enhanceQuery(query: string, context: PerformanceTraceContext|null): Promise<string> {
     if (!context) {
       this.clearDeclaredFunctions();
       return query;
@@ -379,62 +438,62 @@ export class PerformanceAgent extends AiAgent<TimelineUtils.AIContext.AgentFocus
     this.#declareFunctions(context);
 
     const focus = context.getItem();
+    const selected: string[] = [];
 
-    if (focus.data.type === 'full') {
-      return query;
+    if (focus.event) {
+      const includeEventInfo = focus.event !== this.#lastEventForEnhancedQuery;
+      this.#lastEventForEnhancedQuery = focus.event;
+      if (includeEventInfo) {
+        selected.push(`User selected an event ${this.#formatter?.serializeEvent(focus.event)}.\n\n`);
+      }
     }
 
-    if (focus.data.type === 'call-tree') {
+    if (focus.callTree) {
       // If this is a followup chat about the same call tree, don't include the call tree serialization again.
       // We don't need to repeat it and we'd rather have more the context window space.
       let contextString = '';
-      if (!this.#callTreeContextSet.has(focus.data.callTree)) {
-        contextString = focus.data.callTree.serialize();
-        this.#callTreeContextSet.add(focus.data.callTree);
+      if (!this.#callTreeContextSet.has(focus.callTree)) {
+        contextString = focus.callTree.serialize();
+        this.#callTreeContextSet.add(focus.callTree);
       }
 
-      if (!contextString) {
-        return query;
+      if (contextString) {
+        selected.push(`User selected the following call tree:\n\n${contextString}\n\n`);
       }
-
-      let enhancedQuery = '';
-      enhancedQuery += `User selected the following call tree:\n\n${contextString}\n\n`;
-      enhancedQuery += `# User query\n\n${query}`;
-      return enhancedQuery;
     }
 
-    if (focus.data.type === 'insight') {
+    if (focus.insight) {
       // We only need to add Insight info to a prompt when the context changes. For example:
       // User clicks Insight A. We need to send info on Insight A with the prompt.
       // User asks follow up question. We do not need to resend Insight A with the prompt.
       // User clicks Insight B. We now need to send info on Insight B with the prompt.
       // User clicks Insight A. We should resend the Insight info with the prompt.
-      const includeInsightInfo = focus.data.insight !== this.#lastInsightForEnhancedQuery;
-      this.#lastInsightForEnhancedQuery = focus.data.insight;
+      const includeInsightInfo = focus.insight !== this.#lastInsightForEnhancedQuery;
+      this.#lastInsightForEnhancedQuery = focus.insight;
 
-      if (!includeInsightInfo) {
-        return query;
+      if (includeInsightInfo) {
+        selected.push(`User selected the ${focus.insight.insightKey} insight.\n\n`);
       }
-
-      let enhancedQuery = '';
-      enhancedQuery += `User selected the ${focus.data.insight.insightKey} insight.\n\n`;
-      enhancedQuery += `# User query\n\n${query}`;
-      return enhancedQuery;
     }
 
-    Platform.assertNever(focus.data, 'Unknown agent focus');
+    if (!selected.length) {
+      return query;
+    }
+
+    selected.push(`# User query\n\n${query}`);
+    return selected.join('');
   }
 
   override async * run(initialQuery: string, options: {
-    selected: ConversationContext<TimelineUtils.AIContext.AgentFocus>|null,
+    selected: PerformanceTraceContext|null,
     signal?: AbortSignal,
   }): AsyncGenerator<ResponseData, void, void> {
     const focus = options.selected?.getItem();
 
     // Clear any previous facts in case the user changed the active context.
     this.clearFacts();
-    if (focus) {
-      this.#addFacts(focus);
+    if (options.selected && focus) {
+      this.#addFacts(options.selected);
     }
 
     return yield* super.run(initialQuery, options);
@@ -518,12 +577,23 @@ export class PerformanceAgent extends AiAgent<TimelineUtils.AIContext.AgentFocus
     });
   }
 
-  #addFacts(focus: TimelineUtils.AIContext.AgentFocus): void {
+  #addFacts(context: PerformanceTraceContext): void {
+    const focus = context.getItem();
+
+    if (!context.external) {
+      this.addFact(this.#notExternalExtraPreambleFact);
+    }
+
+    const isFresh = Tracing.FreshRecording.Tracker.instance().recordingIsFresh(focus.parsedTrace);
+    if (isFresh) {
+      this.addFact(this.#freshTraceExtraPreambleFact);
+    }
+
     this.addFact(this.#callFrameDataDescriptionFact);
     this.addFact(this.#networkDataDescriptionFact);
 
     if (!this.#traceFacts.length) {
-      this.#formatter = new PerformanceTraceFormatter(focus, this.#eventsSerializer);
+      this.#formatter = new PerformanceTraceFormatter(focus);
       this.#createFactForTraceSummary();
       this.#createFactForCriticalRequests();
       this.#createFactForMainThreadBottomUpSummary();
@@ -543,7 +613,7 @@ export class PerformanceAgent extends AiAgent<TimelineUtils.AIContext.AgentFocus
     }
   }
 
-  #cacheFunctionResult(focus: TimelineUtils.AIContext.AgentFocus, key: string, result: string): void {
+  #cacheFunctionResult(focus: AgentFocus, key: string, result: string): void {
     const fact: Host.AidaClient.RequestFact = {
       text: `This is the result of calling ${key}:\n${result}`,
       metadata: {source: key, score: ScorePriority.DEFAULT},
@@ -553,9 +623,9 @@ export class PerformanceAgent extends AiAgent<TimelineUtils.AIContext.AgentFocus
     this.#functionCallCacheForFocus.set(focus, cache);
   }
 
-  #declareFunctions(context: ConversationContext<TimelineUtils.AIContext.AgentFocus>): void {
+  #declareFunctions(context: PerformanceTraceContext): void {
     const focus = context.getItem();
-    const {parsedTrace, insightSet} = focus.data;
+    const {parsedTrace, insightSet} = focus;
 
     this.declareFunction<{insightName: string}, {details: string}>('getInsightDetails', {
       description:
@@ -585,7 +655,7 @@ export class PerformanceAgent extends AiAgent<TimelineUtils.AIContext.AgentFocus
           return {error: 'No insight available'};
         }
 
-        const details = new PerformanceInsightFormatter(parsedTrace, insight).formatInsight();
+        const details = new PerformanceInsightFormatter(focus, insight).formatInsight();
 
         const key = `getInsightDetails('${params.insightName}')`;
         this.#cacheFunctionResult(focus, key, details);
@@ -613,7 +683,7 @@ export class PerformanceAgent extends AiAgent<TimelineUtils.AIContext.AgentFocus
       },
       handler: async params => {
         debugLog('Function call: getEventByKey', params);
-        const event = this.#lookupEvent(params.eventKey as Trace.Types.File.SerializableKey);
+        const event = focus.lookupEvent(params.eventKey as Trace.Types.File.SerializableKey);
         if (!event) {
           return {error: 'Invalid eventKey'};
         }
@@ -772,7 +842,7 @@ export class PerformanceAgent extends AiAgent<TimelineUtils.AIContext.AgentFocus
         },
       },
       displayInfoFromArgs: args => {
-        return {title: lockedString('Looking at call tree…'), action: `getDetailedCallTree(${args.eventKey})`};
+        return {title: lockedString('Looking at call tree…'), action: `getDetailedCallTree('${args.eventKey}')`};
       },
       handler: async args => {
         debugLog('Function call: getDetailedCallTree');
@@ -781,12 +851,12 @@ export class PerformanceAgent extends AiAgent<TimelineUtils.AIContext.AgentFocus
           throw new Error('missing formatter');
         }
 
-        const event = this.#lookupEvent(args.eventKey as Trace.Types.File.SerializableKey);
+        const event = focus.lookupEvent(args.eventKey as Trace.Types.File.SerializableKey);
         if (!event) {
           return {error: 'Invalid eventKey'};
         }
 
-        const tree = TimelineUtils.AICallTree.AICallTree.fromEvent(event, parsedTrace);
+        const tree = AICallTree.fromEvent(event, parsedTrace);
         const callTree = tree ? this.#formatter.formatCallTree(tree) : 'No call tree found';
 
         const key = `getDetailedCallTree(${args.eventKey})`;
@@ -796,7 +866,7 @@ export class PerformanceAgent extends AiAgent<TimelineUtils.AIContext.AgentFocus
 
     });
 
-    const isFresh = TimelineUtils.FreshRecording.Tracker.instance().recordingIsFresh(parsedTrace);
+    const isFresh = Tracing.FreshRecording.Tracker.instance().recordingIsFresh(parsedTrace);
     const hasScriptContents =
         parsedTrace.metadata.enhancedTraceVersion && parsedTrace.data.Scripts.scripts.some(s => s.content);
 
@@ -816,7 +886,7 @@ export class PerformanceAgent extends AiAgent<TimelineUtils.AIContext.AgentFocus
           },
         },
         displayInfoFromArgs: args => {
-          return {title: lockedString('Looking at resource content…'), action: `getResourceContent(${args.url})`};
+          return {title: lockedString('Looking at resource content…'), action: `getResourceContent('${args.url}')`};
         },
         handler: async args => {
           debugLog('Function call: getResourceContent');
@@ -829,16 +899,49 @@ export class PerformanceAgent extends AiAgent<TimelineUtils.AIContext.AgentFocus
             }
           }
 
-          const content = resource.content;
-          if (!content) {
-            return {error: 'Resource has no content'};
+          const content = await resource.requestContentData();
+          if ('error' in content) {
+            return {error: `Could not get resource content: ${content.error}`};
           }
 
           const key = `getResourceContent(${args.url})`;
-          this.#cacheFunctionResult(focus, key, content);
-          return {result: {content}};
+          this.#cacheFunctionResult(focus, key, content.text);
+          return {result: {content: content.text}};
         },
 
+      });
+    }
+
+    if (!context.external) {
+      this.declareFunction<{eventKey: string}, {success: boolean}>('selectEventByKey', {
+        description:
+            'Selects the event in the flamechart for the user. If the user asks to show them something, it\'s likely a good idea to call this function.',
+        parameters: {
+          type: Host.AidaClient.ParametersTypes.OBJECT,
+          description: '',
+          nullable: false,
+          properties: {
+            eventKey: {
+              type: Host.AidaClient.ParametersTypes.STRING,
+              description: 'The key for the event.',
+              nullable: false,
+            }
+          },
+        },
+        displayInfoFromArgs: params => {
+          return {title: lockedString('Selecting event…'), action: `selectEventByKey('${params.eventKey}')`};
+        },
+        handler: async params => {
+          debugLog('Function call: selectEventByKey', params);
+          const event = focus.lookupEvent(params.eventKey as Trace.Types.File.SerializableKey);
+          if (!event) {
+            return {error: 'Invalid eventKey'};
+          }
+
+          const revealable = new SDK.TraceObject.RevealableEvent(event);
+          await Common.Revealer.reveal(revealable);
+          return {result: {success: true}};
+        },
       });
     }
   }

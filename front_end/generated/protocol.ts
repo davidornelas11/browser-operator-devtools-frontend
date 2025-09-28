@@ -1082,8 +1082,10 @@ export namespace Audits {
     WriteErrorInsufficientResources = 'WriteErrorInsufficientResources',
     WriteErrorInvalidMatchField = 'WriteErrorInvalidMatchField',
     WriteErrorInvalidStructuredHeader = 'WriteErrorInvalidStructuredHeader',
+    WriteErrorInvalidTTLField = 'WriteErrorInvalidTTLField',
     WriteErrorNavigationRequest = 'WriteErrorNavigationRequest',
     WriteErrorNoMatchField = 'WriteErrorNoMatchField',
+    WriteErrorNonIntegerTTLField = 'WriteErrorNonIntegerTTLField',
     WriteErrorNonListMatchDestField = 'WriteErrorNonListMatchDestField',
     WriteErrorNonSecureContext = 'WriteErrorNonSecureContext',
     WriteErrorNonStringIdField = 'WriteErrorNonStringIdField',
@@ -8332,7 +8334,7 @@ export namespace IndexedDB {
      */
     objectStoreName: string;
     /**
-     * Index name. If not specified or empty string, it performs an object store data request.
+     * Index name. If not specified, it performs an object store data request.
      */
     indexName?: string;
     /**
@@ -9962,6 +9964,10 @@ export namespace Network {
      * request corresponding to the main frame.
      */
     isSameSite?: boolean;
+    /**
+     * True when the resource request is ad-related.
+     */
+    isAdRelated?: boolean;
   }
 
   /**
@@ -10530,6 +10536,9 @@ export namespace Network {
     path: string;
     /**
      * Cookie expiration date as the number of seconds since the UNIX epoch.
+     * The value is set to -1 if the expiry date is not set.
+     * The value can be null for values that cannot be represented in
+     * JSON (±Inf).
      */
     expires: number;
     /**
@@ -10996,6 +11005,43 @@ export namespace Network {
     Zstd = 'zstd',
   }
 
+  export interface NetworkConditions {
+    /**
+     * Only matching requests will be affected by these conditions. Patterns use the URLPattern constructor string
+     * syntax (https://urlpattern.spec.whatwg.org/). If the pattern is empty, all requests are matched (including p2p
+     * connections).
+     */
+    urlPattern: string;
+    /**
+     * Minimum latency from request sent to response headers received (ms).
+     */
+    latency: number;
+    /**
+     * Maximal aggregated download throughput (bytes/sec). -1 disables download throttling.
+     */
+    downloadThroughput: number;
+    /**
+     * Maximal aggregated upload throughput (bytes/sec).  -1 disables upload throttling.
+     */
+    uploadThroughput: number;
+    /**
+     * Connection type if known.
+     */
+    connectionType?: ConnectionType;
+    /**
+     * WebRTC packet loss (percent, 0-100). 0 disables packet loss emulation, 100 drops all the packets.
+     */
+    packetLoss?: number;
+    /**
+     * WebRTC packet queue length (packet). 0 removes any queue length limitations.
+     */
+    packetQueueLength?: integer;
+    /**
+     * WebRTC packetReordering feature.
+     */
+    packetReordering?: boolean;
+  }
+
   export const enum DirectSocketDnsQueryType {
     Ipv4 = 'ipv4',
     Ipv6 = 'ipv6',
@@ -11359,6 +11405,50 @@ export namespace Network {
      * WebRTC packetReordering feature.
      */
     packetReordering?: boolean;
+  }
+
+  export interface EmulateNetworkConditionsByRuleRequest {
+    /**
+     * True to emulate internet disconnection.
+     */
+    offline: boolean;
+    /**
+     * Configure conditions for matching requests. If multiple entries match a request, the first entry wins.  Global
+     * conditions can be configured by leaving the urlPattern for the conditions empty. These global conditions are
+     * also applied for throttling of p2p connections.
+     */
+    matchedNetworkConditions: NetworkConditions[];
+  }
+
+  export interface EmulateNetworkConditionsByRuleResponse extends ProtocolResponseWithError {
+    /**
+     * An id for each entry in matchedNetworkConditions. The id will be included in the requestWillBeSentExtraInfo for
+     * requests affected by a rule.
+     */
+    ruleIds: string[];
+  }
+
+  export interface OverrideNetworkStateRequest {
+    /**
+     * True to emulate internet disconnection.
+     */
+    offline: boolean;
+    /**
+     * Minimum latency from request sent to response headers received (ms).
+     */
+    latency: number;
+    /**
+     * Maximal aggregated download throughput (bytes/sec). -1 disables download throttling.
+     */
+    downloadThroughput: number;
+    /**
+     * Maximal aggregated upload throughput (bytes/sec).  -1 disables upload throttling.
+     */
+    uploadThroughput: number;
+    /**
+     * Connection type if known.
+     */
+    connectionType?: ConnectionType;
   }
 
   export interface EnableRequest {
@@ -12355,6 +12445,11 @@ export namespace Network {
      * Whether the site has partitioned cookies stored in a partition different than the current one.
      */
     siteHasCookieInOtherPartition?: boolean;
+    /**
+     * The network conditions id if this request was affected by network conditions configured via
+     * emulateNetworkConditionsByRule.
+     */
+    appliedNetworkConditionsId?: string;
   }
 
   /**
@@ -14440,8 +14535,10 @@ export namespace Page {
     WebXR = 'WebXR',
     SharedWorker = 'SharedWorker',
     SharedWorkerMessage = 'SharedWorkerMessage',
+    SharedWorkerWithNoActiveClient = 'SharedWorkerWithNoActiveClient',
     WebLocks = 'WebLocks',
     WebHID = 'WebHID',
+    WebBluetooth = 'WebBluetooth',
     WebShare = 'WebShare',
     RequestedStorageAccessGrant = 'RequestedStorageAccessGrant',
     WebNfc = 'WebNfc',
@@ -20427,6 +20524,10 @@ export namespace HeapProfiler {
      */
     samplingInterval?: number;
     /**
+     * Maximum stack depth. The default value is 128.
+     */
+    stackDepth?: number;
+    /**
      * By default, the sampling heap profiler reports only objects which are
      * still alive when the profile is returned via getSamplingProfile or
      * stopSampling, which is useful for determining what functions contribute
@@ -20887,6 +20988,7 @@ export namespace Runtime {
     Dataview = 'dataview',
     Webassemblymemory = 'webassemblymemory',
     Wasmvalue = 'wasmvalue',
+    Trustedtype = 'trustedtype',
   }
 
   /**
@@ -20980,6 +21082,7 @@ export namespace Runtime {
     Dataview = 'dataview',
     Webassemblymemory = 'webassemblymemory',
     Wasmvalue = 'wasmvalue',
+    Trustedtype = 'trustedtype',
   }
 
   /**
@@ -21044,6 +21147,7 @@ export namespace Runtime {
     Dataview = 'dataview',
     Webassemblymemory = 'webassemblymemory',
     Wasmvalue = 'wasmvalue',
+    Trustedtype = 'trustedtype',
   }
 
   export interface PropertyPreview {

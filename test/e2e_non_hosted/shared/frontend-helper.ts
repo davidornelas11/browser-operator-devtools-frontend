@@ -30,7 +30,6 @@ type DeducedElementType<ElementType extends Element|null, Selector extends strin
 
 const CONTROL_OR_META = platform === 'mac' ? 'Meta' : 'Control';
 
-// TODO: Remove once Chromium updates its version of Node.js to 12+.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const globalThis: any = global;
 
@@ -40,12 +39,16 @@ interface DevToolsReloadParams {
 }
 
 export class DevToolsPage extends PageWrapper {
+  screenshotLog: Record<string, string> = {};
   #currentHighlightedElement?: HighlightedElement;
   #cdpSession?: puppeteer.CDPSession;
 
   constructor(page: puppeteer.Page) {
     super(page);
-    this.#startHeartbeat();
+    if (!TestConfig.debug) {
+      // Timeout here is not useful if we pause the DevTools page
+      this.#startHeartbeat();
+    }
   }
 
   async delayPromisesIfRequired(): Promise<void> {
@@ -103,8 +106,8 @@ export class DevToolsPage extends PageWrapper {
     });
   }
 
-  override async reload() {
-    await super.reload();
+  override async reload(options?: puppeteer.WaitForOptions) {
+    await super.reload(options);
     await this.ensureReadyForTesting();
   }
 
@@ -120,8 +123,15 @@ export class DevToolsPage extends PageWrapper {
    * @param panel Mocks DevTools URL search params to make it open a specific panel on load.
    * @param canDock Mocks DevTools URL search params to make it think whether it can dock or not.
    * This does not control whether or not the panel can actually dock or not.
+   * @param persistReloads If this is true running {@link DevToolsPage.reload} will reloading with
+   * the provided options
    */
-  async reloadWithParams({panel, canDock}: DevToolsReloadParams) {
+  async reloadWithParams({panel, canDock}: DevToolsReloadParams, persistReloads = false) {
+    if (!panel && !canDock) {
+      await this.reload();
+      return;
+    }
+
     // evaluateOnNewDocument is ran before all other JS is loaded
     // ES Modules are only resolved once and always resolved asynchronously
     // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules#other_differences_between_modules_and_classic_scripts
@@ -138,13 +148,17 @@ export class DevToolsPage extends PageWrapper {
     }, panel, canDock);
 
     await this.reload();
-    await this.page.removeScriptToEvaluateOnNewDocument(token.identifier);
+    if (!persistReloads) {
+      await this.page.removeScriptToEvaluateOnNewDocument(token.identifier);
+    }
     if (panel) {
       await this.waitFor(`.panel.${panel}`);
     }
   }
 
   async ensureReadyForTesting() {
+    const devToolsVeLogging = {enabled: true, testing: true};
+    await this.evaluateOnNewDocument(`globalThis.hostConfigForTesting = ${JSON.stringify({devToolsVeLogging})};`);
     await this.waitForFunction(async () => {
       const result = await this.page.evaluate(`(async function() {
         const Main = await import('./entrypoints/main/main.js');
@@ -162,7 +176,10 @@ export class DevToolsPage extends PageWrapper {
   }
 
   async useSoftMenu() {
-    await this.page.evaluate('window.DevToolsAPI.setUseSoftMenu(true)');
+    await this.evaluate(() => {
+      // @ts-expect-error different context
+      DevToolsAPI.setUseSoftMenu(true);
+    });
   }
 
   /**
@@ -543,7 +560,7 @@ export class DevToolsPage extends PageWrapper {
   }
 
   async clickMoreTabsButton(root?: puppeteer.ElementHandle<Element>) {
-    await this.click('aria/More tabs', {root});
+    await this.click('.tabbed-pane-header-tabs-drop-down-container', {root});
   }
 
   async closePanelTab(panelTabSelector: string) {
@@ -736,14 +753,32 @@ export class DevToolsPage extends PageWrapper {
     const session = await this.#getCDPSession();
     await session.send('Animation.setPlaybackRate', {playbackRate: 1});
   }
+
+  // Debugging utility to be used around flaky code and hopefully reveal visual glitches.
+  // Use it with the rdb wrapper to inspect the collected screenshots after a test failure.
+  async captureScreenshot(name?: string) {
+    const index = Object.keys(this.screenshotLog).length + 1;
+    const fullName = index + ' ' + (name ?? 'screenshot');
+    this.screenshotLog[fullName] = await this.screenshot();
+  }
 }
 
 export interface DevtoolsSettings {
   enabledDevToolsExperiments: string[];
   disabledDevToolsExperiments: string[];
   devToolsSettings: Record<string, unknown>;
-  // front_end/ui/legacy/DockController.ts DockState
+  /**
+   * Defined in front_end/ui/legacy/DockController.ts DockState
+   */
   dockingMode: 'bottom'|'right'|'left'|'undocked';
+  // DevTools panel to open on load
+  /**
+   * The name of the panel to be loaded initially
+   * This persist after {@link DevToolsPage.reload}
+   *
+   * To reload into a panel use {@link DevToolsPage.reloadWithParams}
+   */
+  panel: string|undefined;
 }
 
 export const DEFAULT_DEVTOOLS_SETTINGS: DevtoolsSettings = {
@@ -753,6 +788,7 @@ export const DEFAULT_DEVTOOLS_SETTINGS: DevtoolsSettings = {
     veLogsTestMode: true,
   },
   dockingMode: 'right',
+  panel: undefined
 };
 
 /**
@@ -774,21 +810,16 @@ async function setDevToolsSettings(devToolsPata: DevToolsPage, settings: Record<
         return [value[0], JSON.stringify(value[1])];
     }
   });
-
-  return await devToolsPata.evaluate(`(async () => {
+  const expression = `(async () => {
       const Common = await import('./core/common/common.js');
+      var setting;
       ${
       rawValues
-          .map(([settingName, value]) => {
-            // Creating the setting might not be enough if it already exists, so we
-            // create it and then forcibly set the value
-            return `{
-              const setting = Common.Settings.Settings.instance().createSetting('${settingName}', ${value});
-              setting.set(${value});
-            }`;
-          })
-          .join('')}
-    })()`);
+          .map(([settingName, value]) => `setting = Common.Settings.Settings.instance().createSetting('${settingName}');
+      setting.set(${value})`)
+          .join('\n      ')}
+    })()`;
+  return await devToolsPata.evaluate(expression);
 }
 
 /**
@@ -860,7 +891,8 @@ export async function setupDevToolsPage(
     setDevToolsExperiments(devToolsPage, settings.enabledDevToolsExperiments),
     setDisabledDevToolsExperiments(devToolsPage, settings.disabledDevToolsExperiments),
   ]);
-  await devToolsPage.reload();
+
+  await devToolsPage.reloadWithParams({panel: settings.panel}, true);
 
   await Promise.all([
     devToolsPage.throttleCPUIfRequired(),

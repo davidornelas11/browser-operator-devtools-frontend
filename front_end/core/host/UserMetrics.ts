@@ -507,7 +507,12 @@ export enum Action {
   AiAssistanceOpenedFromPerformanceInsight = 182,
   AiAssistanceOpenedFromPerformanceFullButton = 183,
   AiCodeCompletionResponseServedFromCache = 184,
-  MAX_VALUE = 185,
+  AiCodeCompletionRequestTriggered = 185,
+  AiCodeCompletionSuggestionDisplayed = 186,
+  AiCodeCompletionSuggestionAccepted = 187,
+  AiCodeCompletionError = 188,
+  AttributeLinkClicked = 189,
+  MAX_VALUE = 190,
   /* eslint-enable @typescript-eslint/naming-convention */
 }
 
@@ -793,7 +798,6 @@ export enum DevtoolsExperiments {
   'just-my-code' = 65,
   'use-source-map-scopes' = 76,
   'timeline-show-postmessage-events' = 86,
-  'timeline-save-as-gz' = 108,
   'timeline-enhanced-traces' = 90,
   'timeline-compiled-sources' = 91,
   'timeline-debug-mode' = 93,
@@ -1191,7 +1195,8 @@ export const enum SwatchType {
   ANGLE = 7,
   LENGTH = 8,
   POSITION_TRY_LINK = 10,
-  MAX_VALUE = 11,
+  ATTR_LINK = 11,
+  MAX_VALUE = 12,
 }
 
 export const enum BadgeType {

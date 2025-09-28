@@ -7,6 +7,7 @@ import * as Common from '../../core/common/common.js';
 import * as i18n from '../../core/i18n/i18n.js';
 import * as Platform from '../../core/platform/platform.js';
 import * as SDK from '../../core/sdk/sdk.js';
+import * as AIAssistance from '../../models/ai_assistance/ai_assistance.js';
 import * as CrUXManager from '../../models/crux-manager/crux-manager.js';
 import * as Trace from '../../models/trace/trace.js';
 import * as Workspace from '../../models/workspace/workspace.js';
@@ -374,7 +375,7 @@ export class TimelineFlameChartView extends Common.ObjectWrapper.eventMixin<Even
     this.chartSplitWidget.setMainWidget(flameChartsContainer);
     this.chartSplitWidget.setSidebarWidget(this.countersView);
     this.chartSplitWidget.hideDefaultResizer();
-    this.chartSplitWidget.installResizer((this.countersView.resizerElement() as Element));
+    this.chartSplitWidget.installResizer(this.countersView.resizerElement());
 
     // Create top level properties splitter.
     this.detailsSplitWidget = new UI.SplitWidget.SplitWidget(false, true, 'timeline-panel-details-split-view-state');
@@ -1509,22 +1510,25 @@ export class TimelineFlameChartView extends Common.ObjectWrapper.eventMixin<Even
     // supports (currently, only main thread events), then set the context's
     // "flavor" to be the AI Call Tree of the active event.
     // This is listened to by the AI Assistance panel to update its state.
-    // Note that we do not change the Context back to `null` if the user picks
-    // an invalid event - we don't want to reset it back as it may be they are
-    // clicking around in order to understand something.
     // We also do this in a rAF to not block the UI updating to show the selected event first.
-    if (selectionIsEvent(selection) && this.#parsedTrace) {
-      requestAnimationFrame(() => {
-        if (!this.#parsedTrace) {
-          return;
-        }
-        const aiCallTree = Utils.AICallTree.AICallTree.fromEvent(selection.event, this.#parsedTrace);
-        if (aiCallTree) {
-          const context = Utils.AIContext.AgentFocus.fromCallTree(aiCallTree);
-          UI.Context.Context.instance().setFlavor(Utils.AIContext.AgentFocus, context);
-        }
-      });
-    }
+    requestAnimationFrame(() => {
+      if (!this.#parsedTrace) {
+        return;
+      }
+
+      const event = selectionIsEvent(selection) ? selection.event : null;
+
+      let focus = UI.Context.Context.instance().flavor(AIAssistance.AgentFocus);
+      if (focus) {
+        focus = focus.withEvent(event);
+      } else if (event) {
+        focus = AIAssistance.AgentFocus.fromEvent(this.#parsedTrace, event);
+      } else {
+        focus = null;
+      }
+
+      UI.Context.Context.instance().setFlavor(AIAssistance.AgentFocus, focus);
+    });
   }
 
   // Only opens the details view of a selection. This is used for Timing Markers. Timing markers replace
@@ -1759,6 +1763,10 @@ export class TimelineFlameChartView extends Common.ObjectWrapper.eventMixin<Even
   }
 
   supportsCaseSensitiveSearch(): boolean {
+    return true;
+  }
+
+  supportsWholeWordSearch(): boolean {
     return true;
   }
 
