@@ -10,6 +10,7 @@ import {
   navigateToCoverageTestSite,
   startInstrumentingCoverage,
   stopInstrumentingCoverage,
+  waitForCoverageData,
   waitForTheCoveragePanelToLoad,
 } from '../../e2e/helpers/coverage-helpers.js';
 import {
@@ -38,18 +39,20 @@ describe('The Coverage Panel', () => {
     await navigateToCoverageTestSite(inspectedPage);
     await startInstrumentingCoverage(devToolsPage);
     const URL_PREFIX = `${inspectedPage.getResourcesPath()}/coverage`;
-    assert.deepEqual(await getCoverageData(2, devToolsPage), [
-      {
-        total: '193',
-        unused: '35',
-        url: `${URL_PREFIX}/default.html`,
-      },
-      {
-        total: '43',
-        unused: '31',
-        url: `${URL_PREFIX}/script.js`,
-      },
-    ]);
+    await waitForCoverageData(
+        [
+          {
+            total: '193',
+            unused: '35',
+            url: `${URL_PREFIX}/default.html`,
+          },
+          {
+            total: '43',
+            unused: '31',
+            url: `${URL_PREFIX}/script.js`,
+          },
+        ],
+        devToolsPage);
   });
 
   it(
@@ -61,34 +64,35 @@ describe('The Coverage Panel', () => {
         await tabExistsInMainPanel(COVERAGE_TAB_ID, devToolsPage);
         await startInstrumentingCoverage(devToolsPage);
         const URL_PREFIX = `${inspectedPage.getResourcesPath()}/coverage`;
-        assert.deepEqual(await getCoverageData(5, devToolsPage), [
-          {
-            total: '283',
-            unused: '276',
-            url: `${URL_PREFIX}/unused-css-coverage.html`,
-          },
-          {
-            total: '176',
-            unused: '176',
-            url: `${URL_PREFIX}/not-initially-used.css`,
-          },
-          {
-            total: '174',
-            unused: '174',
-            url: `${URL_PREFIX}/unused.css`,
-          },
-          {
-            total: '176',
-            unused: '152',
-            url: `${URL_PREFIX}/used.css`,
-          },
-          {
-            total: '0',
-            unused: '0',
-            url: `${URL_PREFIX}/empty.css`,
-          },
-        ]);
-
+        await waitForCoverageData(
+            [
+              {
+                total: '283',
+                unused: '276',
+                url: `${URL_PREFIX}/unused-css-coverage.html`,
+              },
+              {
+                total: '176',
+                unused: '176',
+                url: `${URL_PREFIX}/not-initially-used.css`,
+              },
+              {
+                total: '174',
+                unused: '174',
+                url: `${URL_PREFIX}/unused.css`,
+              },
+              {
+                total: '176',
+                unused: '152',
+                url: `${URL_PREFIX}/used.css`,
+              },
+              {
+                total: '0',
+                unused: '0',
+                url: `${URL_PREFIX}/empty.css`,
+              },
+            ],
+            devToolsPage);
         await inspectedPage.evaluate('appendStylesheet()');
 
         assert.deepInclude(await getCoverageData(6, devToolsPage), {
@@ -101,10 +105,10 @@ describe('The Coverage Panel', () => {
 
         // This is the expected `textContent` for the coverage row.
         // It reads as {URL}{type: CSS}{Total Bytes: 176}{Unused Bytes: 176 100%}
-        await devToolsPage.waitForElementWithTextContent(`${URL_PREFIX}/not-initially-used.cssCSS176176100%`);
+        await devToolsPage.waitForElementWithTextContent(`${URL_PREFIX}/not-initially-used.cssCSS17615286.4%`);
         assert.deepInclude(await getCoverageData(6, devToolsPage), {
           total: '176',
-          unused: '176',
+          unused: '152',
           url: `${URL_PREFIX}/not-initially-used.css`,
         });
       });

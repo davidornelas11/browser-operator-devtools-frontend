@@ -12,6 +12,8 @@ import type * as ProtocolClient from '../protocol_client/protocol_client.js';
 import {ParallelConnection} from './Connections.js';
 import {PrimaryPageChangeType, ResourceTreeModel} from './ResourceTreeModel.js';
 import {SDKModel} from './SDKModel.js';
+import {SecurityOriginManager} from './SecurityOriginManager.js';
+import {StorageKeyManager} from './StorageKeyManager.js';
 import {Capability, type Target, Type} from './Target.js';
 import {Events as TargetManagerEvents, TargetManager} from './TargetManager.js';
 
@@ -175,6 +177,8 @@ export class ChildTargetManager extends SDKModel<EventTypes> implements Protocol
       type = Type.FRAME;
     } else if (targetInfo.type === 'page') {
       type = Type.FRAME;
+    } else if (targetInfo.type === 'browser_ui') {
+      type = Type.FRAME;
     } else if (targetInfo.type === 'worker') {
       type = Type.Worker;
     } else if (targetInfo.type === 'worklet') {
@@ -203,6 +207,39 @@ export class ChildTargetManager extends SDKModel<EventTypes> implements Protocol
     // to resume even if there is another session waiting for the debugger.
     if (waitingForDebugger) {
       void target.runtimeAgent().invoke_runIfWaitingForDebugger();
+    }
+
+    // For top-level workers (those not attached to a frame), we need to
+    // initialize their storage context manually. The `Capability.STORAGE` is
+    // only granted in `Target.ts` to workers that are not parented by a frame,
+    // which makes this check safe. Frame-associated workers have their storage
+    // managed by ResourceTreeModel.
+    if (type !== Type.FRAME && target.hasAllCapabilities(Capability.STORAGE)) {
+      await this.initializeStorage(target);
+    }
+  }
+
+  private async initializeStorage(target: Target): Promise<void> {
+    const storageAgent = target.storageAgent();
+    const response = await storageAgent.invoke_getStorageKey({});
+
+    const storageKey = response.storageKey;
+    if (response.getError() || !storageKey) {
+      console.error(`Failed to get storage key for target ${target.id()}: ${response.getError()}`);
+      return;
+    }
+
+    const storageKeyManager = target.model(StorageKeyManager);
+    if (storageKeyManager) {
+      storageKeyManager.setMainStorageKey(storageKey);
+      storageKeyManager.updateStorageKeys(new Set([storageKey]));
+    }
+
+    const securityOriginManager = target.model(SecurityOriginManager);
+    if (securityOriginManager) {
+      const origin = new URL(storageKey).origin;
+      securityOriginManager.setMainSecurityOrigin(origin, '');
+      securityOriginManager.updateSecurityOrigins(new Set([origin]));
     }
   }
 

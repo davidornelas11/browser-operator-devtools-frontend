@@ -50,31 +50,31 @@ const REPORTING_API_EXPLANATION_URL =
 interface ViewInput {
   hasReports: boolean;
   hasEndpoints: boolean;
-  // TODO (crbug.com/407940329): port EndpointsGrid to a UI Widget and instantiate it in the view
-  endpointsGrid: ApplicationComponents.EndpointsGrid.EndpointsGrid;
-  // TODO (crbug.com/407940381): port ReportsGrid to a UI Widget and instantiate it in the view
-  reportsGrid: ApplicationComponents.ReportsGrid.ReportsGrid;
+  endpoints: Map<string, Protocol.Network.ReportingApiEndpoint[]>;
+  reports: Protocol.Network.ReportingApiReport[];
   focusedReport?: Protocol.Network.ReportingApiReport;
+  onReportSelected: (id: string) => void;
 }
 
-type View = (input: ViewInput, output: object, target: HTMLElement) => void;
-
-export const DEFAULT_VIEW: View = (input, _output, target) => {
+export const DEFAULT_VIEW = (input: ViewInput, output: undefined, target: HTMLElement): void => {
   if (input.hasReports || input.hasEndpoints) {
     // clang-format off
     render(html`
+      <style>${UI.inspectorCommonStyles}</style>
       <devtools-split-view sidebar-position="second" sidebar-initial-size="150" jslog=${
           VisualLogging.pane('reporting-api')}>
         ${input.hasReports ? html`
           <devtools-split-view slot="main" sidebar-position="second" sidebar-initial-size="150">
             <div slot="main">
-              ${input.reportsGrid}
+              <devtools-widget .widgetConfig=${widgetConfig(ApplicationComponents.ReportsGrid.ReportsGrid, {
+                reports: input.reports, onReportSelected: input.onReportSelected,
+              })}></devtools-widget>
             </div>
             <div slot="sidebar" class="vbox" jslog=${VisualLogging.pane('preview').track({resize: true})}>
               ${input.focusedReport ? html`
-                <devtools-widget .widgetConfig=${widgetConfig(
-                  element => SourceFrame.JSONView.JSONView.createViewSync(input.focusedReport?.body || '', element)
-                )}></devtools-widget>
+                <devtools-widget .widgetConfig=${widgetConfig(SourceFrame.JSONView.SearchableJsonView, {
+                  jsonObject: input.focusedReport.body,
+                })}></devtools-widget>
               ` : html`
                 <devtools-widget .widgetConfig=${widgetConfig(UI.EmptyWidget.EmptyWidget, {
                   header: i18nString(UIStrings.noReportSelected),
@@ -85,11 +85,15 @@ export const DEFAULT_VIEW: View = (input, _output, target) => {
           </devtools-split-view>
         ` : html`
           <div slot="main">
-            ${input.reportsGrid}
+            <devtools-widget .widgetConfig=${widgetConfig(ApplicationComponents.ReportsGrid.ReportsGrid, {
+                reports: input.reports, onReportSelected: input.onReportSelected,
+              })}></devtools-widget>
           </div>
         `}
         <div slot="sidebar">
-          ${input.endpointsGrid}
+          <devtools-widget .widgetConfig=${widgetConfig(ApplicationComponents.EndpointsGrid.EndpointsGrid, {
+            endpoints: input.endpoints,
+          })}></devtools-widget>
         </div>
       </devtools-split-view>
     `, target);
@@ -107,22 +111,20 @@ export const DEFAULT_VIEW: View = (input, _output, target) => {
   }
 };
 
+type View = typeof DEFAULT_VIEW;
+
 export class ReportingApiView extends UI.Widget.VBox implements
     SDK.TargetManager.SDKModelObserver<SDK.NetworkManager.NetworkManager> {
-  readonly #endpointsGrid: ApplicationComponents.EndpointsGrid.EndpointsGrid;
   #endpoints: Map<string, Protocol.Network.ReportingApiEndpoint[]>;
   #view: View;
   #networkManager?: SDK.NetworkManager.NetworkManager;
-  #reportsGrid = new ApplicationComponents.ReportsGrid.ReportsGrid();
   #reports: Protocol.Network.ReportingApiReport[] = [];
   #focusedReport?: Protocol.Network.ReportingApiReport;
 
-  constructor(endpointsGrid: ApplicationComponents.EndpointsGrid.EndpointsGrid, view = DEFAULT_VIEW) {
+  constructor(view = DEFAULT_VIEW) {
     super();
     this.#view = view;
-    this.#endpointsGrid = endpointsGrid;
     this.#endpoints = new Map();
-    this.#reportsGrid.addEventListener('select', this.#onFocus.bind(this));
     SDK.TargetManager.TargetManager.instance().observeModels(SDK.NetworkManager.NetworkManager, this);
     this.requestUpdate();
   }
@@ -158,35 +160,32 @@ export class ReportingApiView extends UI.Widget.VBox implements
     const viewInput = {
       hasReports: this.#reports.length > 0,
       hasEndpoints: this.#endpoints.size > 0,
-      endpointsGrid: this.#endpointsGrid,
-      reportsGrid: this.#reportsGrid,
+      endpoints: this.#endpoints,
+      reports: this.#reports,
       focusedReport: this.#focusedReport,
+      onReportSelected: this.#onReportSelected.bind(this),
     };
-    this.#view(viewInput, {}, this.element);
+    this.#view(viewInput, undefined, this.element);
   }
 
   #onEndpointsChangedForOrigin({data}: {data: Protocol.Network.ReportingApiEndpointsChangedForOriginEvent}): void {
     this.#endpoints.set(data.origin, data.endpoints);
-    this.#endpointsGrid.data = {endpoints: this.#endpoints};
     this.requestUpdate();
   }
 
   #onReportAdded({data: report}: {data: Protocol.Network.ReportingApiReport}): void {
     this.#reports.push(report);
-    this.#reportsGrid.data = {reports: this.#reports};
     this.requestUpdate();
   }
 
   #onReportUpdated({data: report}: {data: Protocol.Network.ReportingApiReport}): void {
     const index = this.#reports.findIndex(oldReport => oldReport.id === report.id);
     this.#reports[index] = report;
-    this.#reportsGrid.data = {reports: this.#reports};
     this.requestUpdate();
   }
 
-  async #onFocus(event: Event): Promise<void> {
-    const selectEvent = event as CustomEvent<string>;
-    const report = this.#reports.find(report => report.id === selectEvent.detail);
+  #onReportSelected(id: string): void {
+    const report = this.#reports.find(report => report.id === id);
     if (report) {
       this.#focusedReport = report;
       this.requestUpdate();

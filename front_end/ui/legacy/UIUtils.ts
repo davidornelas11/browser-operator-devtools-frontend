@@ -62,7 +62,6 @@ import smallBubbleStyles from './smallBubble.css.js';
 import type {ToolbarButton} from './Toolbar.js';
 import {Tooltip} from './Tooltip.js';
 import {Widget} from './Widget.js';
-import type {XWidget} from './XWidget.js';
 
 declare global {
   interface HTMLElementTagNameMap {
@@ -858,7 +857,7 @@ export function highlightRangesWithStyleClass(
   return highlightNodes;
 }
 
-// Used in chromium/src/third_party/blink/web_tests/http/tests/devtools/components/utilities-highlight-results.js
+/** Used in chromium/src/third_party/blink/web_tests/http/tests/devtools/components/utilities-highlight-results.js **/
 export function applyDomChanges(domChanges: HighlightChange[]): void {
   for (let i = 0, size = domChanges.length; i < size; ++i) {
     const entry = domChanges[i];
@@ -1935,27 +1934,11 @@ function updateWidgetfocusWidgetForNode(node: Node|null): void {
   }
 }
 
-function updateXWidgetfocusWidgetForNode(node: Node|null): void {
-  node = node?.parentNodeOrShadowHost() ?? null;
-  const XWidgetConstructor = customElements.get('x-widget') as Platform.Constructor.Constructor<XWidget>| undefined;
-  let widget = null;
-  while (node) {
-    if (XWidgetConstructor && node instanceof XWidgetConstructor) {
-      if (widget) {
-        node.defaultFocusedElement = widget;
-      }
-      widget = node;
-    }
-    node = node.parentNodeOrShadowHost();
-  }
-}
-
 function focusChanged(event: Event): void {
   const target = event.target as HTMLElement;
   const document = target ? target.ownerDocument : null;
   const element = document ? Platform.DOMUtilities.deepActiveElement(document) : null;
   updateWidgetfocusWidgetForNode(element);
-  updateXWidgetfocusWidgetForNode(element);
 }
 
 /**
@@ -2152,6 +2135,7 @@ export function bindToAction(actionName: string): ReturnType<typeof Directives.r
   const action = ActionRegistry.instance().getAction(actionName);
 
   let setEnabled: (enabled: boolean) => void;
+  let toggled: () => void;
   function actionEnabledChanged(event: Common.EventTarget.EventTargetEvent<boolean>): void {
     setEnabled(event.data);
   }
@@ -2159,6 +2143,7 @@ export function bindToAction(actionName: string): ReturnType<typeof Directives.r
   return Directives.ref((e: Element|undefined) => {
     if (!e || !(e instanceof Buttons.Button.Button)) {
       action.removeEventListener(ActionRegistration.Events.ENABLED, actionEnabledChanged);
+      action.removeEventListener(ActionRegistration.Events.TOGGLED, toggled);
       return;
     }
 
@@ -2168,10 +2153,34 @@ export function bindToAction(actionName: string): ReturnType<typeof Directives.r
 
     action.addEventListener(ActionRegistration.Events.ENABLED, actionEnabledChanged);
 
+    const toggleable = action.toggleable();
+    if (toggleable) {
+      toggled = () => {
+        e.toggled = action.toggled();
+        if (action.title()) {
+          e.title = action.title();
+          Tooltip.installWithActionBinding(e, action.title(), action.id());
+        }
+      };
+      action.addEventListener(ActionRegistration.Events.TOGGLED, toggled);
+    }
     const title = action.title();
-    const iconName = action.icon();
+    const iconName = action.icon() ?? '';
     const jslogContext = action.id();
-    if (iconName) {
+    const toggledIconName = action.toggledIcon() ?? iconName;
+    const toggleType = action.toggleWithRedColor() ? Buttons.Button.ToggleType.RED : Buttons.Button.ToggleType.PRIMARY;
+    if (toggleable) {
+      e.data = {
+        jslogContext,
+        title,
+        variant: Buttons.Button.Variant.ICON_TOGGLE,
+        iconName,
+        toggledIconName,
+        toggleType,
+        toggled: action.toggled(),
+      };
+      toggled();
+    } else if (iconName) {
       e.data = {iconName, jslogContext, title, variant: Buttons.Button.Variant.ICON};
     } else {
       e.data = {jslogContext, title, variant: Buttons.Button.Variant.TEXT};
@@ -2282,6 +2291,10 @@ export class HTMLElementWithLightDOMTemplate extends HTMLElement {
     }
   }
 
+  get templateRoot(): DocumentFragment|HTMLElement {
+    return this.#contentTemplate?.content ?? this;
+  }
+
   set template(template: Lit.LitTemplate) {
     if (!this.#contentTemplate) {
       this.removeChildren();
@@ -2314,5 +2327,23 @@ export class HTMLElementWithLightDOMTemplate extends HTMLElement {
   }
 
   protected removeNodes(_nodes: NodeList): void {
+  }
+
+  static findCorrespondingElement(
+      sourceElement: HTMLElement, sourceRootElement: HTMLElement, targetRootElement: Element): Element|null {
+    let currentElement = sourceElement;
+    const childIndexesOnPathToRoot: number[] = [];
+    while (currentElement?.parentElement && currentElement !== sourceRootElement) {
+      childIndexesOnPathToRoot.push([...currentElement.parentElement.children].indexOf(currentElement));
+      currentElement = currentElement.parentElement;
+    }
+    if (!currentElement) {
+      return null;
+    }
+    let targetElement = targetRootElement;
+    for (const index of childIndexesOnPathToRoot.reverse()) {
+      targetElement = targetElement.children[index];
+    }
+    return targetElement;
   }
 }

@@ -591,12 +591,14 @@ declare namespace ProtocolProxyApi {
 
   export interface BrowserApi {
     /**
-     * Set permission settings for given requesting and embedding origins.
+     * Set permission settings for given embedding and embedded origins.
      */
     invoke_setPermission(params: Protocol.Browser.SetPermissionRequest): Promise<Protocol.ProtocolResponseWithError>;
 
     /**
-     * Grant specific permissions to the given origin and reject all others.
+     * Grant specific permissions to the given origin and reject all others. Deprecated. Use
+     * setPermission instead.
+     * @deprecated
      */
     invoke_grantPermissions(params: Protocol.Browser.GrantPermissionsRequest): Promise<Protocol.ProtocolResponseWithError>;
 
@@ -2521,7 +2523,9 @@ declare namespace ProtocolProxyApi {
     invoke_emulateNetworkConditions(params: Protocol.Network.EmulateNetworkConditionsRequest): Promise<Protocol.ProtocolResponseWithError>;
 
     /**
-     * Activates emulation of network conditions for individual requests using URL match patterns.
+     * Activates emulation of network conditions for individual requests using URL match patterns. Unlike the deprecated
+     * Network.emulateNetworkConditions this method does not affect `navigator` state. Use Network.overrideNetworkState to
+     * explicitly modify `navigator` behavior.
      */
     invoke_emulateNetworkConditionsByRule(params: Protocol.Network.EmulateNetworkConditionsByRuleRequest): Promise<Protocol.Network.EmulateNetworkConditionsByRuleResponse>;
 
@@ -3824,8 +3828,16 @@ declare namespace ProtocolProxyApi {
   export interface StorageApi {
     /**
      * Returns a storage key given a frame id.
+     * Deprecated. Please use Storage.getStorageKey instead.
+     * @deprecated
      */
     invoke_getStorageKeyForFrame(params: Protocol.Storage.GetStorageKeyForFrameRequest): Promise<Protocol.Storage.GetStorageKeyForFrameResponse>;
+
+    /**
+     * Returns storage key for the given frame. If no frame ID is provided,
+     * the storage key of the target executing this command is returned.
+     */
+    invoke_getStorageKey(params: Protocol.Storage.GetStorageKeyRequest): Promise<Protocol.Storage.GetStorageKeyResponse>;
 
     /**
      * Clears storage for origin.

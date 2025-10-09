@@ -31,7 +31,7 @@ const ALLOWED_ASSERTION_FAILURES = [
   // See: https://crbug.com/1192052
   'Request Runtime.evaluate failed. {"code":-32602,"message":"uniqueContextId not found"}',
   'uniqueContextId not found',
-  'Request Storage.getStorageKeyForFrame failed. {"code":-32602,"message":"Frame tree node for given frame not found"}',
+  'Request Storage.getStorageKey failed. {"code":-32602,"message":"Frame tree node for given frame not found"}',
   // Some left-over a11y calls show up in the logs.
   'Request Accessibility.getChildAXNodes failed. {"code":-32602,"message":"Invalid ID"}',
   'Unable to create texture',
@@ -219,7 +219,9 @@ export function dumpCollectedErrors(): void {
 const pendingErrorExpectations = new Set<ErrorExpectation>();
 export let fatalErrors: string[] = [];
 export let expectedErrors: string[] = [];
-// Gathered separately so we can surface them during screenshot tests to help
-// give an idea of failures, rather than having to guess purely based on the
-// screenshot.
+/**
+ * Gathered separately so we can surface them during screenshot tests to help
+ * give an idea of failures, rather than having to guess purely based on the
+ * screenshot.
+ **/
 export const uiComponentDocErrors: Error[] = [];

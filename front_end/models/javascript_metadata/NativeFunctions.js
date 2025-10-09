@@ -986,7 +986,7 @@ export const NativeFunctions = [
   {
     name: "from",
     signatures: [["value"]],
-    receivers: ["Observable"]
+    receivers: ["Observable","Origin"]
   },
   {
     name: "drawArraysInstancedANGLE",
@@ -5356,18 +5356,13 @@ export const NativeFunctions = [
   },
   {
     name: "createImageBitmap",
-    signatures: [["image","?options"],["image","sx","sy","sw","sh","?options"]],
+    signatures: [["image","?options"],["imageBitmap","?options"],["image","sx","sy","sw","sh","?options"],["imageBitmap","sx","sy","sw","sh","?options"]],
     receivers: ["Window","WorkerGlobalScope"]
   },
   {
     name: "createImageBitmap",
-    signatures: [["image","?options"],["imageBitmap","?options"],["image","sx","sy","sw","sh","?options"],["imageBitmap","sx","sy","sw","sh","?options"]],
+    signatures: [["image","?options"],["image","sx","sy","sw","sh","?options"]],
     receivers: ["Window"]
-  },
-  {
-    name: "createImageBitmap",
-    signatures: [["imageBitmap","?options"],["imageBitmap","sx","sy","sw","sh","?options"]],
-    receivers: ["WorkerGlobalScope"]
   },
   {
     name: "fetch",
@@ -7086,6 +7081,10 @@ export const NativeFunctions = [
     signatures: [["message"]]
   },
   {
+    name: "IntersectionObserver",
+    signatures: [["callback","?options"]]
+  },
+  {
     name: "layoutNextFragment",
     signatures: [["?options"]]
   },
@@ -7982,7 +7981,7 @@ export const NativeFunctions = [
   },
   {
     name: "constant",
-    signatures: [["tensor"],["desc","buffer"]]
+    signatures: [["tensor"],["desc","buffer"],["type","value"]]
   },
   {
     name: "argMin",
@@ -8829,6 +8828,10 @@ export const NativeFunctions = [
   {
     name: "VideoEncoder",
     signatures: [["init"]]
+  },
+  {
+    name: "VideoFrame",
+    signatures: [["source","?init"],["data","init"]]
   },
   {
     name: "clipControlEXT",

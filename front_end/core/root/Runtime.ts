@@ -303,7 +303,7 @@ export class Experiment {
   }
 }
 
-// This must be constructed after the query parameters have been parsed.
+/** This must be constructed after the query parameters have been parsed. **/
 export const experiments = new ExperimentsSupport();
 
 /**
@@ -476,6 +476,7 @@ interface GlobalAiButton {
 
 interface GdpProfiles {
   enabled: boolean;
+  badgesEnabled: boolean;
   starterBadgeEnabled: boolean;
 }
 

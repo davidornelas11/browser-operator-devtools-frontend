@@ -21,8 +21,10 @@ import {
   waitForResult,
 } from '../../e2e/helpers/lighthouse-helpers.js';
 
-// This test will fail (by default) in headful mode, as the target page never gets painted.
-// To resolve this when debugging, just make sure the target page is visible during the lighthouse run.
+/**
+ * This test will fail (by default) in headful mode, as the target page never gets painted.
+ * To resolve this when debugging, just make sure the target page is visible during the lighthouse run.
+ **/
 function expectErrors() {
   // https://github.com/GoogleChrome/lighthouse/issues/14572
   expectError(/Request CacheStorage\.requestCacheNames failed/);
@@ -232,7 +234,8 @@ describe('with changed settings', function() {
     consoleLog.push(e.text());
   };
 
-  it('successfully returns a Lighthouse report', async ({devToolsPage, inspectedPage}) => {
+  // Flaky Lighthouse report
+  it.skip('[crbug.com/445332283] successfully returns a Lighthouse report', async ({devToolsPage, inspectedPage}) => {
     devToolsPage.page.on('console', consoleListener);
     try {
       expectErrors();

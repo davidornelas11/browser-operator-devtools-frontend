@@ -14,14 +14,16 @@ import type {HandlerName} from './types.js';
 const MILLISECONDS_TO_MICROSECONDS = 1000;
 const SECONDS_TO_MICROSECONDS = 1000000;
 
-// Network requests from traces are actually formed of 5 trace records.
-// This handler tracks all trace records based on the request ID, and
-// then creates a new synthetic trace event for those network requests.
-//
-// This interface, then, defines the shape of the object we intend to
-// keep for each request in the trace. In the finalize we will convert
-// these 5 types of trace records to a synthetic complete event that
-// represents a composite of these trace records.
+/**
+ * Network requests from traces are actually formed of 5 trace records.
+ * This handler tracks all trace records based on the request ID, and
+ * then creates a new synthetic trace event for those network requests.
+ *
+ * This interface, then, defines the shape of the object we intend to
+ * keep for each request in the trace. In the finalize we will convert
+ * these 5 types of trace records to a synthetic complete event that
+ * represents a composite of these trace records.
+ **/
 export interface TraceEventsForNetworkRequest {
   changePriority?: Types.Events.ResourceChangePriority;
   willSendRequests?: Types.Events.ResourceWillSendRequest[];
@@ -295,6 +297,7 @@ export async function finalize(): Promise<void> {
      *
      * See `_updateTimingsForLightrider` in Lighthouse for more detail.
      */
+    let lrServerResponseTime;
     if (isLightrider && request.receiveResponse?.args.data.headers) {
       timing = {
         requestTime: Helpers.Timing.microToSeconds(request.sendRequests.at(0)?.ts ?? 0 as Types.Timing.Micro),
@@ -329,6 +332,14 @@ export async function finalize(): Promise<void> {
         timing.sslStart = TCPMs / 2 as Types.Timing.Milli;
         timing.connectEnd = TCPMs as Types.Timing.Milli;
         timing.sslEnd = TCPMs as Types.Timing.Milli;
+      }
+
+      // Lightrider does not have any equivalent for `sendEnd` timing values. The
+      // closest we can get to the server response time is from a header that
+      // Lightrider sets.
+      const ResponseMsHeader = request.receiveResponse.args.data.headers.find(h => h.name === 'X-ResponseMs');
+      if (ResponseMsHeader) {
+        lrServerResponseTime = Math.max(0, parseInt(ResponseMsHeader.value, 10)) as Types.Timing.Milli;
       }
     }
 
@@ -437,6 +448,15 @@ export async function finalize(): Promise<void> {
         Types.Timing.Micro((timing.receiveHeadersEnd - timing.sendEnd) * MILLISECONDS_TO_MICROSECONDS) :
         Types.Timing.Micro(0);
 
+    // Server Response Time
+    // =======================
+    // Time from when the send finished going to when the first byte of headers were received.
+    const serverResponseTime = timing ?
+        Types.Timing.Micro(
+            ((timing.receiveHeadersStart ?? timing.receiveHeadersEnd) - timing.sendEnd) *
+            MILLISECONDS_TO_MICROSECONDS) :
+        Types.Timing.Micro(0);
+
     // Download
     // =======================
     // Time from receipt of headers to the finish time.
@@ -502,6 +522,7 @@ export async function finalize(): Promise<void> {
                 stalled,
                 totalTime,
                 waiting,
+                serverResponseTime,
               },
               // All fields below are from TraceEventsForNetworkRequest.
               decodedBodyLength,
@@ -526,6 +547,7 @@ export async function finalize(): Promise<void> {
               initiator: finalSendRequest.args.data.initiator,
               stackTrace: finalSendRequest.args.data.stackTrace,
               timing,
+              lrServerResponseTime,
               url,
               failed: request.resourceFinish?.args.data.didFail ?? false,
               finished: Boolean(request.resourceFinish),

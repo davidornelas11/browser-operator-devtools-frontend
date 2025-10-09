@@ -479,8 +479,25 @@ export class Tooltip extends HTMLElement {
     }
   };
 
+  #globalKeyDown = (event: KeyboardEvent): void => {
+    if (!this.open || event.key !== 'Escape') {
+      return;
+    }
+
+    this.#openedViaHotkey = false;
+    this.toggle();
+    event.consume(true);
+  };
+
   #keyDown = (event: KeyboardEvent): void => {
-    if ((event.altKey && event.key === 'ArrowDown') || (event.key === 'Escape' && this.open)) {
+    // This supports the scenario where the user uses Alt+ArrowDown in hotkey
+    // mode to toggle the visibility.
+    // Note that the "Escape to close" scenario is handled in the global
+    // keydown function so we capture Escape presses even if the tooltip does
+    // not have focus.
+    const shouldToggleVisibility = (this.useHotkey && event.altKey && event.key === 'ArrowDown');
+
+    if (shouldToggleVisibility) {
       this.#openedViaHotkey = !this.open;
       this.toggle();
       event.consume(true);
@@ -488,16 +505,20 @@ export class Tooltip extends HTMLElement {
   };
 
   #registerEventListeners(): void {
+    document.body.addEventListener('keydown', this.#globalKeyDown);
     if (this.#anchor) {
+      // We bind the keydown listener regardless of if use-hotkey is enabled
+      // as we always want to support ESC to close.
+      this.#anchor.addEventListener('keydown', this.#keyDown);
+
       if (this.useClick) {
         this.#anchor.addEventListener('click', this.toggle);
       } else {
         this.#anchor.addEventListener('mouseenter', this.showTooltip);
-        if (this.useHotkey) {
-          this.#anchor.addEventListener('keydown', this.#keyDown);
-        } else {
+        if (!this.useHotkey) {
           this.#anchor.addEventListener('focus', this.showTooltip);
         }
+
         this.#anchor.addEventListener('blur', this.hideTooltip);
         this.#anchor.addEventListener('mouseleave', this.hideTooltip);
         this.addEventListener('mouseleave', this.hideTooltip);
@@ -516,6 +537,11 @@ export class Tooltip extends HTMLElement {
     if (this.#timeout) {
       window.clearTimeout(this.#timeout);
     }
+
+    // Should always exist when this component is used, but in test
+    // environments on Chromium this isn't always the case, hence the body? check.
+    document.body?.removeEventListener('keydown', this.#globalKeyDown);
+
     if (this.#anchor) {
       this.#anchor.removeEventListener('click', this.toggle);
       this.#anchor.removeEventListener('mouseenter', this.showTooltip);

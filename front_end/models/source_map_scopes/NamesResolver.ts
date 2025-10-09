@@ -9,8 +9,6 @@ import * as Bindings from '../bindings/bindings.js';
 import * as Formatter from '../formatter/formatter.js';
 import * as TextUtils from '../text_utils/text_utils.js';
 
-import {scopeTreeForScript} from './ScopeTreeCache.js';
-
 interface CachedScopeMap {
   sourceMap: SDK.SourceMap.SourceMap|undefined;
   mappingPromise: Promise<{variableMapping: Map<string, string>, thisMapping: string|null}>;
@@ -55,7 +53,7 @@ scopeTree:
     return null;
   }
 
-  const scopeTree = await scopeTreeForScript(script);
+  const scopeTree = await SDK.ScopeTreeCache.scopeTreeForScript(script);
   if (!scopeTree) {
     return null;
   }
@@ -240,7 +238,7 @@ const resolveScope = async(script: SDK.Script.Script, scopeChain: Formatter.Form
                     return;
                   }
                 }
-                // If there is no entry with the name field, try to infer the name from the source positions.
+                /** If there is no entry with the name field, try to infer the name from the source positions. **/
                 async function resolvePosition(): Promise<void> {
                   if (!sourceMap) {
                     return;
@@ -684,10 +682,12 @@ export class RemoteObject extends SDK.RemoteObject.RemoteObject {
   }
 }
 
-// Resolve the frame's function name using the name associated with the opening
-// paren that starts the scope. If there is no name associated with the scope
-// start or if the function scope does not start with a left paren (e.g., arrow
-// function with one parameter), the resolution returns null.
+/**
+ * Resolve the frame's function name using the name associated with the opening
+ * paren that starts the scope. If there is no name associated with the scope
+ * start or if the function scope does not start with a left paren (e.g., arrow
+ * function with one parameter), the resolution returns null.
+ **/
 async function getFunctionNameFromScopeStart(
     script: SDK.Script.Script, lineNumber: number, columnNumber: number): Promise<string|null> {
   // To reduce the overhead of resolving function names,

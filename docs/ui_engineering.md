@@ -1223,3 +1223,101 @@ export const DEFAULT_VIEW = (input, _output, target) => {
     target, {host: input});
 };
 ```
+
+## Refactoring UI.Toolbar.Provider
+
+As part of the migration, sometimes classes need to be broken up into smaller pieces. Classes implementing
+`UI.Toolbar.Provider` logic are good examples of this, if they implement `View` logic in addition to their
+`UI.Toolbar.Provider` responsibilities. The View logic needs to be moved to a separate class.
+
+
+**Before:**
+```typescript
+export class NodeIndicator implements UI.Toolbar.Provider {
+  readonly #element: Element;
+  readonly #item: UI.Toolbar.ToolbarItem;
+
+  private constructor() {
+    // Creates `this.#element` and `this.#item` imperatively (e.g. using document.createElement/createChild).
+  }
+  static instance(opts: { forceNew: boolean|null, } = {forceNew: null}): NodeIndicator {
+    // Creates an instance of this class and returns it.
+  }
+  #update(input): void { /* Handles updates to `this.#element` and `this.#item`. */}
+  item(): UI.Toolbar.ToolbarItem|null {
+    return this.#item;
+  }
+}
+```
+
+**After:**
+```typescript
+export const DEFAULT_VIEW: View = (input, output, target) => {
+  // Implementation of the View using Lit.render() (omitted for brevity).
+};
+
+export class NodeIndicator extends UI.Widget.Widget {
+  readonly #view: View;
+
+  constructor(element?: HTMLElement, view = DEFAULT_VIEW) {
+    super(element, {useShadowDom: true});
+    this.#view = view;
+  }
+
+  override performUpdate(): void {
+    const input = {
+      // Whatever input the View needs.
+    };
+    this.#view(input, {}, this.contentElement);
+  }
+}
+
+let nodeIndicatorProviderInstance: NodeIndicatorProvider;
+export class NodeIndicatorProvider implements UI.Toolbar.Provider {
+  #toolbarItem: UI.Toolbar.ToolbarItem;
+  #widgetElement: UI.Widget.WidgetElement<NodeIndicator>;
+
+  private constructor() {
+    this.#widgetElement = document.createElement('devtools-widget') as UI.Widget.WidgetElement<NodeIndicator>;
+    this.#widgetElement.widgetConfig = UI.Widget.widgetConfig(NodeIndicator);
+
+    this.#toolbarItem = new UI.Toolbar.ToolbarItem(this.#widgetElement);
+    this.#toolbarItem.setVisible(false);
+  }
+
+  item(): UI.Toolbar.ToolbarItem|null {
+    return this.#toolbarItem;
+  }
+
+  static instance(opts: {forceNew: boolean|null} = {forceNew: null}): NodeIndicatorProvider {
+    const {forceNew} = opts;
+    if (!nodeIndicatorProviderInstance || forceNew) {
+      nodeIndicatorProviderInstance = new NodeIndicatorProvider();
+    }
+
+    return nodeIndicatorProviderInstance;
+  }
+}
+```
+
+## Highlighting text
+
+### (UI.UIUtils.highlightRangesWithStyleClass or Highlighting.HighlightManager)
+
+Use the `<devtools-highlight>` component to highlight text ranges within its
+container. The component takes two attributes: `ranges`, which is a
+space-separated list of `offset,length` pairs, and `current-range`, which is a
+single `offset,length` pair to highlight with a different color.
+
+The component will automatically sort and merge the ranges provided.
+
+```html
+<div style="position:relative">
+  <devtools-highlight ranges="10,2 1,3 2,3" current-range="5,3">
+    This is some text to highlight.
+  </devtools-highlight>
+</div>
+```
+
+In this example, the ranges `1,3` and `2,3` will be merged into `1,4`. The
+ranges `10,2` and the current range `5,3` will also be highlighted.

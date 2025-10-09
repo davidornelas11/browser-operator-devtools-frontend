@@ -57,6 +57,7 @@ describeWithEnvironment('BaseInsightComponent', () => {
         strings: {},
         title: 'LCP by Phase' as Common.UIString.LocalizedString,
         description: 'some description' as Common.UIString.LocalizedString,
+        docs: '',
         category: Trace.Insights.Types.InsightCategory.ALL,
         state: 'fail',
         frameId: '123',
@@ -83,6 +84,7 @@ describeWithEnvironment('BaseInsightComponent', () => {
         strings: {},
         title: 'LCP by Phase' as Common.UIString.LocalizedString,
         description: 'some description' as Common.UIString.LocalizedString,
+        docs: '',
         category: Trace.Insights.Types.InsightCategory.ALL,
         state: 'fail',
         frameId: '123',
@@ -117,6 +119,7 @@ describeWithEnvironment('BaseInsightComponent', () => {
         strings: {},
         title: 'LCP by Phase' as Common.UIString.LocalizedString,
         description: 'some description' as Common.UIString.LocalizedString,
+        docs: '',
         category: Trace.Insights.Types.InsightCategory.ALL,
         state: 'fail',
         frameId: '123',
@@ -136,7 +139,8 @@ describeWithEnvironment('BaseInsightComponent', () => {
   });
 
   describe('estimated savings output', () => {
-    let testComponentIndex = 0;  // used for defining the custom element and making it unique
+    // used for defining the custom element and making it unique
+    let testComponentIndex = 0;
     function makeTestComponent(opts: {wastedBytes?: number, timeSavings?: number}) {
       class TestInsight extends BaseInsightComponent<Trace.Insights.Types.InsightModel> {
         override internalName = 'test-insight';
@@ -167,6 +171,7 @@ describeWithEnvironment('BaseInsightComponent', () => {
         strings: {},
         title: 'LCP by Phase' as Common.UIString.LocalizedString,
         description: 'some description' as Common.UIString.LocalizedString,
+        docs: '',
         category: Trace.Insights.Types.InsightCategory.ALL,
         state: 'fail',
         frameId: '123',
@@ -186,6 +191,7 @@ describeWithEnvironment('BaseInsightComponent', () => {
         strings: {},
         title: 'LCP by Phase' as Common.UIString.LocalizedString,
         description: 'some description' as Common.UIString.LocalizedString,
+        docs: '',
         category: Trace.Insights.Types.InsightCategory.ALL,
         state: 'fail',
         frameId: '123',
@@ -205,6 +211,7 @@ describeWithEnvironment('BaseInsightComponent', () => {
         strings: {},
         title: 'LCP by Phase' as Common.UIString.LocalizedString,
         description: 'some description' as Common.UIString.LocalizedString,
+        docs: '',
         category: Trace.Insights.Types.InsightCategory.ALL,
         state: 'fail',
         frameId: '123',
@@ -224,6 +231,7 @@ describeWithEnvironment('BaseInsightComponent', () => {
         strings: {},
         title: 'LCP by Phase' as Common.UIString.LocalizedString,
         description: 'some description' as Common.UIString.LocalizedString,
+        docs: '',
         category: Trace.Insights.Types.InsightCategory.ALL,
         state: 'fail',
         frameId: '123',
@@ -246,6 +254,7 @@ describeWithEnvironment('BaseInsightComponent', () => {
       strings: {},
       title: 'LCP by Phase' as Common.UIString.LocalizedString,
       description: 'some description' as Common.UIString.LocalizedString,
+      docs: '',
       category: Trace.Insights.Types.InsightCategory.ALL,
       state: 'fail',
       frameId: '123',
@@ -378,6 +387,7 @@ describeWithEnvironment('BaseInsightComponent', () => {
         strings: {},
         title: 'LCP by Phase' as Common.UIString.LocalizedString,
         description: 'some description' as Common.UIString.LocalizedString,
+        docs: '',
         category: Trace.Insights.Types.InsightCategory.ALL,
         state: 'fail',
         frameId: '123',
