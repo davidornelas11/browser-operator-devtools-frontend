@@ -24,7 +24,16 @@ import {
   NodeIDsToURLsTool,
   GetVisitsByDomainTool,
   GetVisitsByKeywordTool,
-  SearchVisitHistoryTool, type Tool
+  SearchVisitHistoryTool,
+  RenderWebAppTool,
+  GetWebAppDataTool,
+  RemoveWebAppTool,
+  CreateFileTool,
+  UpdateFileTool,
+  DeleteFileTool,
+  ReadFileTool,
+  ListFilesTool,
+  type Tool
 } from '../tools/Tools.js';
 // Imports from their own files
 
@@ -48,6 +57,7 @@ Always delegate investigative work to the 'search_agent' tool so it can gather v
 
 - Launch search_agent with a clear objective, attribute list, filters, and quantity requirement.
 - Review the JSON output, double-check confidence values and citations, and surface the most credible findings.
+- Use the file management tools ('create_file', 'update_file', 'read_file', 'list_files') to coordinate multi-step fact-finding. Persist subtask outputs as you go, read existing files before launching overlapping searches, and append incremental findings rather than duplicating effort.
 - If the user pivots into broad synthesis or long-form reporting, switch to the 'research_agent'.
 - Keep responses concise, cite the strongest sources, and present the structured findings provided by the agent.
 
@@ -116,6 +126,12 @@ Based on query type, develop a specific research plan:
 - Delegating clear tasks to research agents
 - Synthesizing findings
 - Identifying gaps and deploying additional agents as needed
+
+**Coordinate through session files:**
+- Before launching a new subtask, call 'list_files' to inspect existing outputs and avoid duplication.
+- Persist each subtask's plan, raw notes, and structured results with 'create_file'/'update_file'. Include timestamps and ownership so other agents can build on the work.
+- Encourage sub-agents to read relevant files ('read_file') before acting, and to append updates instead of overwriting unless the instructions explicitly call for replacement.
+- Use file summaries to track progress, surface blockers, and keep an audit trail for the final synthesis.
 
 **Clear instructions to research agents must include:**
 - Specific research objectives (ideally one core objective per agent)
@@ -299,6 +315,14 @@ export const AGENT_CONFIGS: {[key: string]: AgentConfig} = {
       ToolRegistry.getToolInstance('research_agent') || (() => { throw new Error('research_agent tool not found'); })(),
       new FinalizeWithCritiqueTool(),
       new SearchVisitHistoryTool(),
+      new RenderWebAppTool(),
+      new GetWebAppDataTool(),
+      new RemoveWebAppTool(),
+      new CreateFileTool(),
+      new UpdateFileTool(),
+      new DeleteFileTool(),
+      new ReadFileTool(),
+      new ListFilesTool(),
     ]
   },
   [BaseOrchestratorAgentType.DEEP_RESEARCH]: {
@@ -315,6 +339,14 @@ export const AGENT_CONFIGS: {[key: string]: AgentConfig} = {
       ToolRegistry.getToolInstance('bookmark_store') || (() => { throw new Error('bookmark_store tool not found'); })(),
       ToolRegistry.getToolInstance('search_agent') || (() => { throw new Error('search_agent tool not found'); })(),
       new FinalizeWithCritiqueTool(),
+      new RenderWebAppTool(),
+      new GetWebAppDataTool(),
+      new RemoveWebAppTool(),
+      new CreateFileTool(),
+      new UpdateFileTool(),
+      new DeleteFileTool(),
+      new ReadFileTool(),
+      new ListFilesTool(),
     ]
   },
   // [BaseOrchestratorAgentType.SHOPPING]: {
@@ -500,6 +532,11 @@ export function getAgentTools(agentType: string): Array<Tool<any, any>> {
     ToolRegistry.getToolInstance('research_agent') || (() => { throw new Error('research_agent tool not found'); })(),
     new FinalizeWithCritiqueTool(),
     new SearchVisitHistoryTool(),
+    new CreateFileTool(),
+    new UpdateFileTool(),
+    new DeleteFileTool(),
+    new ReadFileTool(),
+    new ListFilesTool(),
   ];
 }
 

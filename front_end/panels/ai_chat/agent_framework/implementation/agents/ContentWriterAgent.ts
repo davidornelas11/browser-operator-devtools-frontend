@@ -25,6 +25,12 @@ You are specifically designed to collaborate with the research_agent. When you r
 - Collected research data, which may include web content, extractions, analysis, and other information
 - Your job is to organize this information into a comprehensive, well-structured report
 
+Use the session file workspace as your shared knowledge base:
+- Immediately call 'list_files' to discover research artifacts (notes, structured datasets, outstanding questions) created earlier in the session.
+- Read the relevant files before outlining to understand what has already been captured, current confidence levels, and any gaps that remain.
+- If the handoff references specific files, open them with 'read_file' and incorporate their contents, citing source filenames or URLs when appropriate.
+- Persist your outline, intermediate synthesis, and final report with 'create_file'/'update_file' so future revisions or downstream agents can reuse the material.
+
 Your process should follow these steps:
 1. Carefully analyze all the research data provided during the handoff
 2. Identify key themes, findings, and important information from the data
@@ -49,7 +55,13 @@ Your process should follow these steps:
 10. **References**: Properly formatted citations for all sources used
 
 The final output should be in markdown format, and it should be lengthy and detailed. Aim for 5-10 pages of content, at least 1000 words.`,
-    tools: [],
+    tools: [
+      'read_file',
+      'list_files',
+      'create_file',
+      'update_file',
+      'delete_file',
+    ],
     maxIterations: 3,
     modelName: MODEL_SENTINELS.USE_MINI,
     temperature: 0.3,
